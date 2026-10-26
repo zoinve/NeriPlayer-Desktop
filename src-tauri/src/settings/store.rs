@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
-use tauri::AppHandle;
+use std::path::PathBuf;
+use tauri::{AppHandle, Manager};
 use tauri_plugin_store::StoreExt;
 
 use crate::error::{AppError, AppResult};
@@ -71,6 +72,7 @@ pub struct AppSettings {
     pub log_to_file: bool,
     pub log_level: String,
     pub max_cache_size: i32,
+    pub cache_dir: String,
     pub download_name_template: String,
     pub download_dir: String,
     pub lt_server_url: String,
@@ -137,6 +139,7 @@ impl Default for AppSettings {
             log_to_file: false,
             log_level: "info".into(),
             max_cache_size: 1024,
+            cache_dir: String::new(),
             download_name_template: DEFAULT_DOWNLOAD_NAME_TEMPLATE.into(),
             download_dir: String::new(),
             lt_server_url: "https://neriplayer.hancat.work".into(),
@@ -157,17 +160,9 @@ impl Default for AppSettings {
 impl AppSettings {
     pub fn normalize(&mut self) {
         self.format_version = SETTINGS_FORMAT_VERSION;
-        self.dark_mode = normalize_choice(
-            &self.dark_mode,
-            &["system", "dark", "light"],
-            "dark",
-        );
+        self.dark_mode = normalize_choice(&self.dark_mode, &["system", "dark", "light"], "dark");
         self.theme_color = normalize_theme_color(&self.theme_color);
-        self.locale = normalize_choice(
-            &self.locale,
-            &["zh-CN", "zh-TW", "en", "ja"],
-            "zh-CN",
-        );
+        self.locale = normalize_choice(&self.locale, &["zh-CN", "zh-TW", "en", "ja"], "zh-CN");
         self.default_screen = normalize_choice(
             &self.default_screen,
             &["home", "explore", "library"],
@@ -197,14 +192,7 @@ impl AppSettings {
         self.netease_quality = normalize_choice(
             &self.netease_quality,
             &[
-                "standard",
-                "higher",
-                "high",
-                "exhigh",
-                "lossless",
-                "hires",
-                "jyeffect",
-                "sky",
+                "standard", "higher", "high", "exhigh", "lossless", "hires", "jyeffect", "sky",
                 "jymaster",
             ],
             "exhigh",
@@ -232,10 +220,9 @@ impl AppSettings {
         );
 
         self.background_image_uri = self.background_image_uri.trim().into();
-        self.download_name_template = non_empty_or_default(
-            &self.download_name_template,
-            DEFAULT_DOWNLOAD_NAME_TEMPLATE,
-        );
+        self.cache_dir = self.cache_dir.trim().into();
+        self.download_name_template =
+            non_empty_or_default(&self.download_name_template, DEFAULT_DOWNLOAD_NAME_TEMPLATE);
         self.download_dir = self.download_dir.trim().into();
         self.lt_server_url = self.lt_server_url.trim().trim_end_matches('/').into();
         self.lt_nickname = self.lt_nickname.trim().into();
@@ -253,6 +240,42 @@ impl AppSettings {
         self.normalize();
         self
     }
+}
+
+pub fn default_cache_dir(app: &AppHandle) -> AppResult<PathBuf> {
+    app.path()
+        .app_cache_dir()
+        .map_err(|error| AppError::Other(error.to_string()))
+}
+
+pub fn active_cache_dir(app: &AppHandle) -> AppResult<PathBuf> {
+    let settings = load_settings(app)?.settings;
+    if settings.cache_dir.is_empty() {
+        default_cache_dir(app)
+    } else {
+        Ok(PathBuf::from(settings.cache_dir))
+    }
+}
+
+pub fn cache_roots(app: &AppHandle) -> AppResult<Vec<PathBuf>> {
+    let active = active_cache_dir(app)?;
+    let default = default_cache_dir(app)?;
+    let mut roots = vec![active.clone()];
+    if canonical_path_key(&active) != canonical_path_key(&default) {
+        roots.push(default);
+    }
+    Ok(roots)
+}
+
+fn canonical_path_key(path: &std::path::Path) -> String {
+    let key = std::fs::canonicalize(path)
+        .unwrap_or_else(|_| path.to_path_buf())
+        .to_string_lossy()
+        .to_string();
+    #[cfg(target_os = "windows")]
+    return key.to_lowercase();
+    #[cfg(not(target_os = "windows"))]
+    key
 }
 
 pub fn load_settings(app: &AppHandle) -> AppResult<SettingsLoadResult> {
@@ -330,9 +353,7 @@ fn normalize_choice(value: &str, allowed: &[&str], fallback: &str) -> String {
 fn normalize_theme_color(value: &str) -> String {
     let normalized = value.trim().to_ascii_lowercase();
     match normalized.as_str() {
-        "purple" | "teal" | "blue" | "rose" | "olive" | "brown" | "orange" | "green" => {
-            normalized
-        }
+        "purple" | "teal" | "blue" | "rose" | "olive" | "brown" | "orange" | "green" => normalized,
         "#6750a4" => "purple".into(),
         _ => "purple".into(),
     }
@@ -398,5 +419,27 @@ mod tests {
         };
         oversized.normalize();
         assert_eq!(oversized.max_cache_size, MAX_MEDIA_CACHE_SIZE_MB);
+    }
+
+    #[test]
+    fn legacy_settings_without_cache_dir_use_the_default_location() {
+        let mut value = serde_json::to_value(AppSettings::default()).unwrap();
+        value.as_object_mut().unwrap().remove("cacheDir");
+
+        let settings: AppSettings = serde_json::from_value(value).unwrap();
+
+        assert!(settings.cache_dir.is_empty());
+    }
+
+    #[test]
+    fn cache_dir_is_trimmed_without_rewriting_the_selected_path() {
+        let mut settings = AppSettings {
+            cache_dir: "  D:\\Media Cache\\NeriPlayerCache  ".into(),
+            ..AppSettings::default()
+        };
+
+        settings.normalize();
+
+        assert_eq!(settings.cache_dir, "D:\\Media Cache\\NeriPlayerCache");
     }
 }

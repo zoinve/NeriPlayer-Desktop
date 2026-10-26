@@ -4,6 +4,7 @@ import { invoke } from '@tauri-apps/api/core'
 import { useI18n } from 'vue-i18n'
 import type { TrackInfo } from '@/stores/player'
 import { useToastStore } from '@/stores/toast'
+import { useRecommendStore } from '@/stores/recommend'
 import M3Input from '@/components/ui/M3Input.vue'
 import BilibiliCoverImage from '@/components/BilibiliCoverImage.vue'
 import { createLogger } from '@/utils/logger'
@@ -22,13 +23,14 @@ const emit = defineEmits<{
 
 const { t } = useI18n()
 const toast = useToastStore()
+const recommend = useRecommendStore()
 
 interface PlaylistInfo {
   id: number
   name: string
-  track_count: number
-  modified_at: number
-  cover_url: string | null
+  trackCount: number
+  coverUrl: string | null
+  specialType: number
 }
 
 /// B 站图床带防盗链，必须走后端代理组件；其余来源直接 img
@@ -43,8 +45,8 @@ function markCoverFailed(id: number) {
   failedCovers.value = new Set(failedCovers.value)
 }
 function coverFor(pl: PlaylistInfo): string | null {
-  if (!pl.cover_url || failedCovers.value.has(pl.id)) return null
-  return pl.cover_url
+  if (!pl.coverUrl || failedCovers.value.has(pl.id)) return null
+  return pl.coverUrl
 }
 
 const playlists = ref<PlaylistInfo[]>([])
@@ -67,12 +69,20 @@ watch(() => props.open, async (isOpen) => {
 async function loadPlaylists() {
   if (loadRequest) return loadRequest
   isLoading.value = playlists.value.length === 0
-  loadRequest = invoke<PlaylistInfo[]>('list_playlists')
+  loadRequest = invoke<any>('get_user_playlists', { platform: 'netease' })
     .then(result => {
-      playlists.value = result
+      playlists.value = (result?.playlist || [])
+        .filter((playlist: any) => !playlist.subscribed)
+        .map((playlist: any) => ({
+          id: Number(playlist.id),
+          name: String(playlist.name || ''),
+          trackCount: Number(playlist.trackCount) || 0,
+          coverUrl: playlist.coverImgUrl || null,
+          specialType: Number(playlist.specialType) || 0,
+        }))
     })
     .catch(e => {
-      log.error('Load local playlists failed:', e)
+      log.error('Load Netease playlists failed:', e)
     })
     .finally(() => {
       isLoading.value = false
@@ -88,20 +98,27 @@ function targetTracks(): TrackInfo[] {
   return props.track ? [props.track] : []
 }
 
-async function addToPlaylist(playlistId: number) {
-  const targets = targetTracks()
-  if (targets.length === 0 || isSubmitting.value) return
+async function addToPlaylist(playlist: PlaylistInfo) {
+  const songIds = neteaseSongIds(targetTracks())
+  if (songIds.length === 0 || isSubmitting.value) {
+    toast.error(t('library.netease_tracks_only'))
+    return
+  }
   isSubmitting.value = true
   try {
-    if (targets.length === 1) {
-      await invoke('add_to_playlist', { playlistId, track: toBackendTrack(targets[0]) })
+    if (playlist.specialType === 5) {
+      for (const songId of songIds) {
+        const ok = await recommend.toggleLikeSong(songId, true)
+        if (!ok) throw new Error(t('player.like_cloud_sync_failed'))
+      }
     } else {
-      await invoke('add_tracks_to_playlist', { playlistId, tracks: targets.map(toBackendTrack) })
+      await invoke('netease_add_songs_to_playlist', { playlistId: playlist.id, songIds })
     }
     toast.success(t('library.added_to_playlist'))
     emit('update:open', false)
   } catch (e) {
     log.error('Add to playlist failed:', e)
+    toast.error(String(e))
   } finally {
     isSubmitting.value = false
   }
@@ -119,16 +136,19 @@ async function createAndAdd() {
   if (!newName.value.trim() || targets.length === 0 || isSubmitting.value) return
   isSubmitting.value = true
   try {
-    const pl = await invoke<PlaylistInfo>('create_playlist', { name: newName.value.trim() })
-    if (targets.length === 1) {
-      await invoke('add_to_playlist', { playlistId: pl.id, track: toBackendTrack(targets[0]) })
-    } else {
-      await invoke('add_tracks_to_playlist', { playlistId: pl.id, tracks: targets.map(toBackendTrack) })
+    const songIds = neteaseSongIds(targets)
+    if (songIds.length === 0) throw new Error(t('library.netease_tracks_only'))
+    const result = await invoke<any>('netease_create_playlist', { name: newName.value.trim() })
+    const playlistId = Number(result?.playlist?.id ?? result?.id)
+    if (!Number.isSafeInteger(playlistId) || playlistId <= 0) {
+      throw new Error(t('library.cloud_playlist_create_failed'))
     }
+    await invoke('netease_add_songs_to_playlist', { playlistId, songIds })
     toast.success(t('library.added_to_playlist'))
     emit('update:open', false)
   } catch (e) {
     log.error('Create & add failed:', e)
+    toast.error(String(e))
   } finally {
     isSubmitting.value = false
   }
@@ -154,28 +174,12 @@ onBeforeUnmount(() => {
   document.removeEventListener('keydown', handleKeydown)
 })
 
-function inferSource(track: TrackInfo) {
-  if (track.id.startsWith('netease:')) return 'netease'
-  if (track.id.startsWith('qq:')) return 'qq'
-  if (track.id.startsWith('bilibili:')) return 'bilibili'
-  if (track.id.startsWith('youtube:')) return 'youtube'
-  return 'local'
-}
-
-function toBackendTrack(track: TrackInfo) {
-  return {
-    id: track.id,
-    title: track.title,
-    artist: track.artist,
-    album: track.album || '',
-    duration_ms: track.durationMs || 0,
-    source: inferSource(track),
-    url: track.audioUrl || '',
-    cover_url: track.coverUrl || null,
-    added_at: Math.max(0, Math.round(track.addedAt || 0)),
-    sync_payload: track.syncPayload ?? null,
-    playlist_key: track.playlistKey ?? null,
-  }
+function neteaseSongIds(tracks: TrackInfo[]) {
+  return [...new Set(tracks.flatMap(track => {
+    if (!track.id.startsWith('netease:')) return []
+    const id = Number.parseInt(track.id.slice('netease:'.length), 10)
+    return Number.isSafeInteger(id) && id > 0 ? [id] : []
+  }))]
 }
 </script>
 
@@ -187,12 +191,12 @@ function toBackendTrack(track: TrackInfo) {
           class="atp-dialog"
           role="dialog"
           aria-modal="true"
-          :aria-label="t('player.add_to_local_playlist')"
+            :aria-label="t('library.add_to_netease_playlist')"
           @click.stop
         >
           <div class="atp-header">
             <span class="material-symbols-rounded" style="font-size: 24px; color: var(--md-primary)">playlist_add</span>
-            <h3 class="atp-title">{{ t('player.add_to_local_playlist') }}</h3>
+            <h3 class="atp-title">{{ t('library.add_to_netease_playlist') }}</h3>
             <button class="atp-close-btn" :title="t('common.close')" @click="close">
               <span class="material-symbols-rounded">close</span>
             </button>
@@ -232,19 +236,19 @@ function toBackendTrack(track: TrackInfo) {
               class="atp-item"
               :style="{ '--atp-index': Math.min(index, 12) }"
               :class="{ disabled: isSubmitting }"
-              @click="addToPlaylist(pl.id)"
+              @click="addToPlaylist(pl)"
             >
               <div class="atp-item-icon" :class="{ 'has-cover': coverFor(pl) }">
                 <BilibiliCoverImage
-                  v-if="coverFor(pl) && isBilibiliCover(pl.cover_url)"
-                  :src="pl.cover_url!"
+                  v-if="coverFor(pl) && isBilibiliCover(pl.coverUrl)"
+                  :src="pl.coverUrl!"
                   class="atp-item-cover"
                 >
                   <span class="material-symbols-rounded filled" style="font-size: 20px">queue_music</span>
                 </BilibiliCoverImage>
                 <img
                   v-else-if="coverFor(pl)"
-                  :src="pl.cover_url!"
+                  :src="pl.coverUrl!"
                   referrerpolicy="no-referrer"
                   loading="lazy"
                   class="atp-item-cover"
@@ -255,7 +259,7 @@ function toBackendTrack(track: TrackInfo) {
               </div>
               <div class="atp-item-info">
                 <div class="atp-item-name">{{ pl.name }}</div>
-                <div class="atp-item-count">{{ t('library.track_count', { count: pl.track_count }) }}</div>
+                <div class="atp-item-count">{{ t('library.track_count', { count: pl.trackCount }) }}</div>
               </div>
             </div>
           </TransitionGroup>

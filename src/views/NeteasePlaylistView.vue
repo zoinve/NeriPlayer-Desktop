@@ -3,6 +3,9 @@ import { ref, computed, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { usePlayerStore, type TrackInfo } from '@/stores/player'
 import { useDownloadStore } from '@/stores/download'
+import { useRecommendStore } from '@/stores/recommend'
+import { useToastStore } from '@/stores/toast'
+import { useAuthStore } from '@/stores/auth'
 import { useDelayedFlag } from '@/composables/useDelayedFlag'
 import { useI18n } from 'vue-i18n'
 import { invoke } from '@tauri-apps/api/core'
@@ -31,6 +34,9 @@ const route = useRoute()
 const router = useRouter()
 const player = usePlayerStore()
 const downloadStore = useDownloadStore()
+const recommend = useRecommendStore()
+const toast = useToastStore()
+const auth = useAuthStore()
 const { t } = useI18n()
 
 const isLoading = ref(true)
@@ -43,6 +49,10 @@ const trackCount = ref(0)
 const playCount = ref(0)
 const description = ref('')
 const creator = ref('')
+const isSubscribed = ref(false)
+const isOwnedPlaylist = ref(false)
+const isLikedPlaylist = ref(false)
+const subscriptionLoading = ref(false)
 const searchQuery = ref('')
 
 const tracks = ref<TrackInfo[]>([])
@@ -180,6 +190,7 @@ async function loadDetail() {
       playCount.value = pl.playCount || 0
       description.value = pl.description || ''
       creator.value = pl.creator?.nickname || ''
+      isSubscribed.value = Boolean(pl.subscribed)
 
       const songs = pl.tracks || []
       tracks.value = songs.map((s: any) => ({
@@ -191,6 +202,13 @@ async function loadDetail() {
         coverUrl: resolveNeteaseCover(s.al?.picUrl, s.al?.pic),
         audioUrl: '',
       }))
+      await recommend.fetchUserPlaylists('netease')
+      const libraryPlaylist = recommend.userPlaylists.netease?.find(item => Number(item.id) === id)
+      const creatorUserId = Number(pl.creator?.userId) || 0
+      isOwnedPlaylist.value = auth.netease.userId && creatorUserId
+        ? creatorUserId === auth.netease.userId
+        : Boolean(libraryPlaylist && !libraryPlaylist.subscribed)
+      isLikedPlaylist.value = Number(pl.specialType || libraryPlaylist?.specialType) === 5
     }
     saveDetailCache(cacheKey)
   } catch (e: any) {
@@ -199,6 +217,41 @@ async function loadDetail() {
     }
   } finally {
     isLoading.value = false
+  }
+}
+
+async function togglePlaylistSubscription() {
+  if (props.isAlbum || isOwnedPlaylist.value || subscriptionLoading.value) return
+  subscriptionLoading.value = true
+  try {
+    await recommend.setPlaylistSubscribed(Number(route.params.id), !isSubscribed.value)
+    isSubscribed.value = !isSubscribed.value
+    toast.success(t(isSubscribed.value ? 'library.playlist_subscribed' : 'library.playlist_unsubscribed'))
+  } catch (e) {
+    toast.error(String(e))
+  } finally {
+    subscriptionLoading.value = false
+  }
+}
+
+async function removeTrackFromCloudPlaylist(track: TrackInfo) {
+  const songId = Number.parseInt(track.id.replace('netease:', ''), 10)
+  const playlistId = Number(route.params.id)
+  if (!isOwnedPlaylist.value || !Number.isSafeInteger(songId)) return
+  closeTrackMenu()
+  try {
+    if (isLikedPlaylist.value) {
+      const ok = await recommend.toggleLikeSong(songId, false)
+      if (!ok) throw new Error(t('player.like_cloud_sync_failed'))
+    } else {
+      await invoke('netease_remove_songs_from_playlist', { playlistId, songIds: [songId] })
+    }
+    tracks.value = tracks.value.filter(item => item.id !== track.id)
+    trackCount.value = tracks.value.length
+    saveDetailCache(playlistDetailCacheKey('netease-playlist', playlistId))
+    toast.success(t('library.removed_from_playlist'))
+  } catch (e) {
+    toast.error(String(e))
   }
 }
 
@@ -349,6 +402,9 @@ const trackMenuItems = computed<ContextMenuItem[]>(() => {
     createContextMenuItem(t('player.play_next'), { id: 'play-next', icon: 'queue_play_next' }),
     createContextMenuItem(t('player.add_to_queue'), { id: 'add-to-queue', icon: 'add_to_queue' }),
     createContextMenuItem(t('player.add_to_playlist'), { id: 'add-to-playlist', icon: 'playlist_add' }),
+    ...(isOwnedPlaylist.value && !props.isAlbum
+      ? [createContextMenuItem(t('library.remove_from_playlist'), { id: 'remove-from-playlist', icon: 'playlist_remove', danger: true })]
+      : []),
     createContextMenuItem(
       track ? trackDownloadLabel(track) : t('download.download'),
       {
@@ -380,6 +436,9 @@ function handleTrackMenuClick(item: ContextMenuActionItem) {
       break
     case 'download':
       void handleTrackDownload(track)
+      break
+    case 'remove-from-playlist':
+      void removeTrackFromCloudPlaylist(track)
       break
   }
 }
@@ -447,6 +506,15 @@ onMounted(() => {
             </button>
             <button class="hero-icon-btn" :title="t('common.multi_select')" @click="enterSelectionMode()">
               <span class="material-symbols-rounded">checklist</span>
+            </button>
+            <button
+              v-if="!props.isAlbum && !isOwnedPlaylist"
+              class="hero-icon-btn"
+              :disabled="subscriptionLoading"
+              :title="t(isSubscribed ? 'library.unsubscribe_playlist' : 'library.subscribe_playlist')"
+              @click="togglePlaylistSubscription"
+            >
+              <span class="material-symbols-rounded" :class="{ filled: isSubscribed }">{{ isSubscribed ? 'bookmark_added' : 'bookmark_add' }}</span>
             </button>
           </div>
         </div>

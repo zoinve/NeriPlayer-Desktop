@@ -79,6 +79,19 @@ export const usePlaybackStatsStore = defineStore('playbackStats', () => {
           playCountIncrement: snapshot.playCountIncrement,
         },
       })
+      const rawNeteaseId = snapshot.track.track.id.replace(/^netease:/, '')
+      if (
+        snapshot.scheduleSync
+        && snapshot.reportListenedMs >= 1000
+        && (snapshot.track.track.source === 'netease' || snapshot.track.track.id.startsWith('netease:'))
+        && /^\d+$/.test(rawNeteaseId)
+      ) {
+        void invoke('netease_report_playback', {
+          songId: Number(rawNeteaseId),
+          totalTimeMs: Math.max(0, Math.round(snapshot.track.durationMs)),
+          playedMs: snapshot.reportListenedMs,
+        }).catch(error => log.warn('Netease playback report failed:', error))
+      }
     } catch (e) {
       // 统计失败绝不能影响播放
       log.warn('record playback session failed:', e)

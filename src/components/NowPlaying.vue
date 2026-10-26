@@ -38,7 +38,6 @@ import WaveformSlider from './WaveformSlider.vue'
 import LyricsView from './LyricsView.vue'
 import QueuePanel from './QueuePanel.vue'
 import AddToPlaylistDialog from './AddToPlaylistDialog.vue'
-import ListenTogetherPanel from './ListenTogetherPanel.vue'
 import CustomSelect from './ui/CustomSelect.vue'
 import EditableRangeValue from './ui/EditableRangeValue.vue'
 import ContextMenu from './ui/ContextMenu.vue'
@@ -72,7 +71,6 @@ const showAddToPlaylist = ref(false)
 const showAudioFxPanel = ref(false)
 const showSleepMenu = ref(false)
 const showMoreSheet = ref(false)
-const showLtPanel = ref(false)
 const isTrackSwitchAnimating = ref(false)
 const trackSwitchDirection = ref<'prev' | 'next' | 'neutral'>('neutral')
 const controlFeedbackPulse = ref(0)
@@ -1045,7 +1043,6 @@ watch(() => player.hasPlaybackSession, (hasSession) => {
   closeToolbarPopovers()
   showQueue.value = false
   showMoreSheet.value = false
-  showLtPanel.value = false
   contextMenu.value.show = false
 })
 
@@ -1646,15 +1643,6 @@ async function openCurrentArtist() {
   }
 }
 
-function openListenTogetherFromMore() {
-  hideMoreSheet()
-  if (moreSheetSwitchTimer) clearTimeout(moreSheetSwitchTimer)
-  moreSheetSwitchTimer = window.setTimeout(() => {
-    moreSheetSwitchTimer = null
-    if (!showMoreSheet.value) showLtPanel.value = true
-  }, 220)
-}
-
 // 分享歌曲
 async function shareSong() {
   const track = player.currentTrack
@@ -2045,7 +2033,6 @@ const sliderActiveColor = computed(() => {
         <div class="np-slider-area">
           <WaveformSlider
             :progress="player.interpolatedProgress"
-            :is-playing="player.isPlaying"
             :active-color="sliderActiveColor"
             @seek="onSeek"
             @preview="onSliderPreview"
@@ -2217,7 +2204,7 @@ const sliderActiveColor = computed(() => {
             </div>
           </div>
           <!-- 音效 (AudioFX) -->
-          <div class="speed-wrap">
+          <div v-if="false" class="speed-wrap">
             <button class="tool-btn tool-btn--feedback" :class="{ active: showAudioFxPanel || player.hasActiveEffects }" @click="triggerControlFeedbackPulse(); toggleToolbarPanel('audiofx')">
               <span class="material-symbols-rounded">tune</span>
             </button>
@@ -2376,7 +2363,6 @@ const sliderActiveColor = computed(() => {
       <QueuePanel v-if="player.hasPlaybackSession && showQueue" @close="showQueue = false" />
     </Teleport>
     <AddToPlaylistDialog v-if="player.hasPlaybackSession" v-model:open="showAddToPlaylist" :track="player.currentTrack" />
-    <ListenTogetherPanel v-if="player.hasPlaybackSession" v-model:open="showLtPanel" />
 
     <!-- 更多选项面板（对齐 Android MoreOptionsSheet） -->
     <Teleport to="body">
@@ -2446,7 +2432,7 @@ const sliderActiveColor = computed(() => {
             </button>
 
             <!-- 音频效果 -->
-            <button class="np-more-list-item" @click="goToSubView('speed')">
+            <button v-if="false" class="np-more-list-item" @click="goToSubView('speed')">
               <span class="material-symbols-rounded">tune</span>
               <div class="np-more-list-info">
                 <span class="np-more-list-headline">{{ t('player.audio_effects') }}</span>
@@ -2485,7 +2471,7 @@ const sliderActiveColor = computed(() => {
             </button>
 
             <!-- 歌词填充（对齐 Android FillOptionsDialog） -->
-            <button class="np-more-list-item" @click="lyricFillQuery = player.currentTrack?.title || ''; lyricFillResults = []; lyricFillPlatform = currentSource === 'netease' ? 'netease' : (currentSource === 'qq' ? 'qq' : 'lrclib'); goToSubView('lyrics-fill')">
+            <button class="np-more-list-item" @click="lyricFillQuery = player.currentTrack?.title || ''; lyricFillResults = []; lyricFillPlatform = 'netease'; goToSubView('lyrics-fill')">
               <span class="material-symbols-rounded">lyrics</span>
               <div class="np-more-list-info">
                 <span class="np-more-list-headline">{{ t('player.lyrics_fill') }}</span>
@@ -2500,16 +2486,6 @@ const sliderActiveColor = computed(() => {
               <div class="np-more-list-info">
                 <span class="np-more-list-headline">{{ t('player.share') }}</span>
               </div>
-            </button>
-
-            <!-- 一起听 -->
-            <button class="np-more-list-item" @click="openListenTogetherFromMore">
-              <span class="material-symbols-rounded">headphones</span>
-              <div class="np-more-list-info">
-                <span class="np-more-list-headline">{{ t('listen_together.title') }}</span>
-                <span class="np-more-list-desc">创建或加入同步播放房间</span>
-              </div>
-              <span class="material-symbols-rounded np-more-chevron">chevron_right</span>
             </button>
 
             <!-- 下载（在线来源：下载 / 重新下载 / 本地播放状态） -->
@@ -2658,7 +2634,7 @@ const sliderActiveColor = computed(() => {
                 <span class="material-symbols-rounded">search</span>
               </button>
             </div>
-            <div class="np-more-segmented platform">
+            <div v-if="false" class="np-more-segmented platform">
               <button
                 :class="{ active: infoSearchPlatform === 'netease' }"
                 @click="infoSearchPlatform = 'netease'; searchResults = []; infoApplyCandidate = null"
@@ -2959,7 +2935,7 @@ const sliderActiveColor = computed(() => {
                 <span class="material-symbols-rounded">search</span>
               </button>
             </div>
-            <div class="np-more-segmented platform">
+            <div v-if="false" class="np-more-segmented platform">
               <button
                 :class="{ active: lyricFillPlatform === 'netease' }"
                 @click="lyricFillPlatform = 'netease'; lyricFillResults = []"
@@ -3028,8 +3004,7 @@ const sliderActiveColor = computed(() => {
   // 确保完全不透明
   isolation: isolate;
   overflow: hidden;
-  /* 与窗体圆角一致，避免全屏层直角顶出 OS 圆角 */
-  border-radius: var(--radius-lg);
+  border-radius: 0;
   user-select: none;
   -webkit-user-select: none;
   transition: transform 460ms cubic-bezier(0.22, 1, 0.36, 1), opacity 300ms ease;

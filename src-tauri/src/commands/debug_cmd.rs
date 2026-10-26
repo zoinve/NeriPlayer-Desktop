@@ -7,7 +7,10 @@ use serde::Serialize;
 
 /// 拉取最近日志（新→旧）
 #[tauri::command]
-pub fn get_recent_logs(limit: Option<usize>, min_level: Option<String>) -> Vec<logging::RecentLogEntry> {
+pub fn get_recent_logs(
+    limit: Option<usize>,
+    min_level: Option<String>,
+) -> Vec<logging::RecentLogEntry> {
     let level = min_level
         .as_deref()
         .and_then(|value| value.parse::<log::Level>().ok());
@@ -33,7 +36,10 @@ pub fn export_debug_report(app: tauri::AppHandle) -> AppResult<String> {
     ));
     body.push_str("== crash reports ==\n");
     for report in list_crash_reports().unwrap_or_default() {
-        body.push_str(&format!("{} ({} bytes)\n", report.file_name, report.size_bytes));
+        body.push_str(&format!(
+            "{} ({} bytes)\n",
+            report.file_name, report.size_bytes
+        ));
     }
     body.push_str("\n== recent logs (oldest first) ==\n");
     for entry in logs.into_iter().rev() {
@@ -79,7 +85,9 @@ fn validated_crash_path(file_name: &str) -> AppResult<std::path::PathBuf> {
         && !file_name.contains(['/', '\\'])
         && !file_name.contains("..");
     if !valid {
-        return Err(AppError::Other(format!("invalid crash report name: {file_name}")));
+        return Err(AppError::Other(format!(
+            "invalid crash report name: {file_name}"
+        )));
     }
     Ok(logging::crash_dir().join(file_name))
 }

@@ -15,6 +15,7 @@ export interface PlatformAuth {
   loggedIn: boolean
   nickname: string | null
   avatarUrl: string | null
+  userId?: number | null
 }
 
 export interface AuthStatusResponse {
@@ -31,6 +32,7 @@ function mapAuth(raw: any): PlatformAuth {
     loggedIn: raw?.logged_in ?? false,
     nickname: raw?.nickname ?? null,
     avatarUrl: raw?.avatar_url ?? null,
+    userId: Number(raw?.user_id) || null,
   }
 }
 

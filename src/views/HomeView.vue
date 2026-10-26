@@ -4,11 +4,9 @@ import { useRouter } from 'vue-router'
 
 defineOptions({ name: 'HomeView' })
 import { usePlayerStore } from '@/stores/player'
-import { useLibraryStore } from '@/stores/library'
 import { useAuthStore } from '@/stores/auth'
 import { useRecommendStore, type HomeRecommendationSong } from '@/stores/recommend'
 import { useHistoryStore } from '@/stores/history'
-import { useSettingsStore } from '@/stores/settings'
 import { useI18n } from 'vue-i18n'
 import type { TrackInfo } from '@/stores/player'
 import { useToastStore } from '@/stores/toast'
@@ -16,11 +14,9 @@ import BilibiliCoverImage from '@/components/BilibiliCoverImage.vue'
 
 const router = useRouter()
 const player = usePlayerStore()
-const library = useLibraryStore()
 const auth = useAuthStore()
 const recommend = useRecommendStore()
 const history = useHistoryStore()
-const settings = useSettingsStore()
 const toast = useToastStore()
 const { t } = useI18n()
 
@@ -52,7 +48,6 @@ const greeting = computed(() => {
 const quickAccess = computed(() => [
   { title: t('home.recent_play'), icon: 'history', color: 'var(--md-primary-container)', action: 'recent' },
   { title: t('home.favorites'), icon: 'favorite', color: 'var(--md-tertiary-container)', action: 'favorites' },
-  { title: t('home.local_music'), icon: 'folder_open', color: 'var(--md-secondary-container)', action: 'local' },
   { title: t('home.downloads'), icon: 'download', color: 'var(--md-surface-container-highest)', action: 'downloads' },
 ])
 
@@ -61,61 +56,12 @@ const recentTracks = computed(() => {
   return history.entries.slice(0, 12).map(e => e.track)
 })
 
-// 本地音乐
-const localTracks = computed(() => {
-  return library.tracks.slice(0, 20)
-})
-
 // 每日推荐歌曲（网易云）
 const dailySongs = computed(() => {
   return recommend.recommendedSongs.slice(0, 20)
 })
 
-// 用户歌单（多平台合并）
-const myPlaylists = computed(() => {
-  const all = Object.entries(recommend.userPlaylists).flatMap(([platform, list]) =>
-    list.map(pl => ({ ...pl, platform })),
-  )
-  return all.slice(0, 12)
-})
-
-const platformHubs = computed(() => [
-  {
-    key: 'netease',
-    title: t('settings.netease_account'),
-    subtitle: recommend.recommendedPlaylists.length > 0 ? t('home.recommended_playlists') : t('explore.login_for_recommend'),
-    icon: '/icons/ic_netease.svg',
-    color: '#e74c3c',
-    action: () => router.push({ name: 'explore' }),
-  },
-  {
-    key: 'bilibili',
-    title: t('settings.bilibili_account'),
-    subtitle: auth.bilibili.loggedIn
-      ? t('home.recommended_videos')
-      : t('explore.bili_hint'),
-    icon: '/icons/ic_bilibili.svg',
-    color: '#00a1d6',
-    action: () => router.push({ name: 'explore', query: { platform: 'bilibili' } }),
-  },
-  {
-    key: 'youtube',
-    title: t('settings.youtube_account'),
-    subtitle: auth.youtube.loggedIn
-      ? t('player.track_count', { count: recommend.userPlaylists.youtube?.length || 0 })
-      : t('explore.yt_hint'),
-    icon: '/icons/ic_youtube.svg',
-    color: '#ff0033',
-    action: () => router.push({ name: 'explore', query: { platform: 'youtube' } }),
-  },
-])
-
-const youtubeHomeItems = computed(() => recommend.homeFeedShelves.flatMap(s => s.items).slice(0, 14))
-
-// 国际化开启时 YTM 信息流置顶按分区展示 (对齐 Android HomeScreen isInternational 分支)
-const ytFeedFirst = computed(() => settings.internationalizationEnabled && auth.youtube.loggedIn)
-const youtubeHomeShelves = computed(() =>
-  recommend.homeFeedShelves.filter(shelf => shelf.items.length > 0).slice(0, 3))
+const myPlaylists = computed(() => (recommend.userPlaylists.netease || []).slice(0, 12))
 
 // 三列网格分页（每页 3列 x 4行 = 12 项）
 const GRID_PAGE_SIZE = 12
@@ -147,12 +93,10 @@ function searchResultToTrack(s: HomeRecommendationSong): TrackInfo {
 }
 
 async function handleQuickAction(action: string) {
-  if (action === 'local') {
-    router.push({ name: 'library', query: { tab: 'local' } })
-  } else if (action === 'recent') {
+  if (action === 'recent') {
     router.push('/recent')
   } else if (action === 'favorites') {
-    router.push({ name: 'library', query: { tab: 'favorites' } })
+    router.push({ name: 'library' })
   } else if (action === 'downloads') {
     router.push({ name: 'downloads' })
   }
@@ -173,36 +117,11 @@ function playDailySong(song: any) {
 }
 
 function openPlatformPlaylist(pl: any) {
-  if (pl.platform === 'bilibili') {
-    router.push({ name: 'bili-playlist', params: { mediaId: pl.id } })
-  } else if (pl.platform === 'youtube') {
-    router.push({ name: 'youtube-playlist', params: { browseId: pl.id } })
-  } else {
-    router.push({ name: 'netease-playlist', params: { id: pl.id } })
-  }
+  router.push({ name: 'netease-playlist', params: { id: pl.id } })
 }
 
-function openYoutubeHomeItem(item: any) {
-  if (item.browseId) {
-    router.push({ name: 'youtube-playlist', params: { browseId: item.browseId } })
-    return
-  }
-  if (item.videoId) {
-    player.play({
-      id: `youtube:${item.videoId}`,
-      title: item.title,
-      artist: item.subtitle || 'YouTube Music',
-      album: '',
-      durationMs: 0,
-      coverUrl: item.coverUrl || '',
-      audioUrl: '',
-    })
-  }
-}
-
-// 启动时恢复上次扫描 + 拉取推荐
+// 启动时拉取网易云推荐与云端媒体库
 onMounted(() => {
-  if (library.tracks.length === 0) library.restoreLastScan()
   if (recommend.recommendedPlaylists.length === 0) recommend.fetchRecommendedPlaylists()
   if (auth.netease.loggedIn) {
     if (recommend.recommendedSongs.length === 0) recommend.fetchRecommendedSongs()
@@ -210,13 +129,6 @@ onMounted(() => {
     recommend.fetchHomeSearchRecommendations()
   } else {
     recommend.clearHomeSearchRecommendations()
-  }
-  if (auth.bilibili.loggedIn && !recommend.userPlaylists.bilibili?.length) {
-    recommend.fetchUserPlaylists('bilibili')
-  }
-  if (auth.youtube.loggedIn) {
-    if (!recommend.userPlaylists.youtube?.length) recommend.fetchUserPlaylists('youtube')
-    if (recommend.homeFeedShelves.length === 0) recommend.fetchHomeFeed()
   }
 })
 
@@ -240,16 +152,6 @@ watch(() => recommend.homeRadarSongs.items.length, () => {
   radarPage.value = 0
 })
 
-watch(() => auth.bilibili.loggedIn, (loggedIn) => {
-  if (loggedIn) recommend.fetchUserPlaylists('bilibili')
-})
-
-watch(() => auth.youtube.loggedIn, (loggedIn) => {
-  if (loggedIn) {
-    recommend.fetchUserPlaylists('youtube')
-    recommend.fetchHomeFeed()
-  }
-})
 
 // 通知历史
 function openNotifications() {
@@ -329,59 +231,6 @@ function formatNotifTime(ts: number): string {
         <span class="material-symbols-rounded quick-arrow">chevron_right</span>
       </div>
     </section>
-
-    <!-- 多平台入口 -->
-    <section class="section platform-hubs">
-      <div
-        v-for="hub in platformHubs"
-        :key="hub.key"
-        class="platform-hub-card"
-        :style="{ '--hub-color': hub.color }"
-        @click="hub.action()"
-      >
-        <span class="platform-hub-icon" :style="{ maskImage: `url(${hub.icon})` }"></span>
-        <div class="platform-hub-copy">
-          <div class="platform-hub-title">{{ hub.title }}</div>
-          <div class="platform-hub-subtitle">{{ hub.subtitle }}</div>
-        </div>
-        <span class="material-symbols-rounded">arrow_forward</span>
-      </div>
-    </section>
-
-    <!-- YouTube Music 信息流（国际化开启时置顶按分区展示, 对齐 Android isInternational 分支） -->
-    <template v-if="ytFeedFirst">
-      <section
-        v-for="shelf in youtubeHomeShelves"
-        :key="'ytm-shelf-' + shelf.title"
-        class="section"
-      >
-        <div class="section-header">
-          <h2 class="section-title">
-            <span class="platform-inline-icon" style="--platform-color: #ff0033; mask-image: url('/icons/ic_youtube.svg')"></span>
-            {{ shelf.title || 'YouTube Music' }}
-          </h2>
-          <button class="section-more" @click="router.push({ name: 'explore', query: { platform: 'youtube' } })">
-            <span>{{ t('home.more') }}</span>
-            <span class="material-symbols-rounded" style="font-size: 18px">arrow_forward</span>
-          </button>
-        </div>
-        <div class="daily-scroll">
-          <div
-            v-for="item in shelf.items.slice(0, 14)"
-            :key="item.browseId || item.videoId || item.title"
-            class="daily-card"
-            @click="openYoutubeHomeItem(item)"
-          >
-            <div class="daily-cover">
-              <span class="material-symbols-rounded filled cover-fallback">music_note</span>
-              <BilibiliCoverImage v-if="item.coverUrl" :src="item.coverUrl" loading="lazy" />
-            </div>
-            <div class="daily-name">{{ item.title }}</div>
-            <div class="daily-artist">{{ item.subtitle }}</div>
-          </div>
-        </div>
-      </section>
-    </template>
 
     <!-- 骨架屏（首次加载且无缓存时） -->
     <section v-if="showSkeleton" class="section">
@@ -485,10 +334,6 @@ function formatNotifTime(ts: number): string {
     <section v-if="recommend.recommendedPlaylists.length > 0" class="section">
       <div class="section-header">
         <h2 class="section-title">{{ t('home.for_you') }}</h2>
-        <button class="section-more" @click="router.push('/explore')">
-          <span>{{ t('home.more') }}</span>
-          <span class="material-symbols-rounded" style="font-size: 18px">arrow_forward</span>
-        </button>
       </div>
       <div class="daily-scroll">
         <div
@@ -524,35 +369,6 @@ function formatNotifTime(ts: number): string {
           </div>
           <div class="daily-name">{{ song.name }}</div>
           <div class="daily-artist">{{ song.ar?.map((a: any) => a.name).join(', ') }}</div>
-        </div>
-      </div>
-    </section>
-
-    <!-- YouTube Music 首页 Feed（国际化关闭时保持在底部的单分区形态） -->
-    <section v-if="!ytFeedFirst && youtubeHomeItems.length > 0" class="section">
-      <div class="section-header">
-        <h2 class="section-title">
-          <span class="platform-inline-icon" style="--platform-color: #ff0033; mask-image: url('/icons/ic_youtube.svg')"></span>
-          YouTube Music
-        </h2>
-        <button class="section-more" @click="router.push({ name: 'explore', query: { platform: 'youtube' } })">
-          <span>{{ t('home.more') }}</span>
-          <span class="material-symbols-rounded" style="font-size: 18px">arrow_forward</span>
-        </button>
-      </div>
-      <div class="daily-scroll">
-        <div
-          v-for="item in youtubeHomeItems"
-          :key="item.browseId || item.videoId || item.title"
-          class="daily-card"
-          @click="openYoutubeHomeItem(item)"
-        >
-          <div class="daily-cover">
-            <span class="material-symbols-rounded filled cover-fallback">music_note</span>
-            <BilibiliCoverImage v-if="item.coverUrl" :src="item.coverUrl" loading="lazy" />
-          </div>
-          <div class="daily-name">{{ item.title }}</div>
-          <div class="daily-artist">{{ item.subtitle }}</div>
         </div>
       </div>
     </section>
@@ -614,35 +430,6 @@ function formatNotifTime(ts: number): string {
       </div>
     </section>
 
-    <!-- 本地音乐 -->
-    <section v-if="localTracks.length > 0" class="section">
-      <div class="section-header">
-        <h2 class="section-title">{{ t('home.local_music') }}</h2>
-        <button class="section-more" @click="router.push('/library')">
-          <span>{{ t('home.more') }}</span>
-          <span class="material-symbols-rounded" style="font-size: 18px">arrow_forward</span>
-        </button>
-      </div>
-      <div class="daily-scroll">
-        <div
-          v-for="track in localTracks"
-          :key="track.id"
-          class="daily-card"
-          @click="player.play(track)"
-        >
-          <div class="daily-cover">
-            <span class="material-symbols-rounded filled cover-fallback">music_note</span>
-            <BilibiliCoverImage
-              v-if="track.coverUrl"
-              :src="track.coverUrl"
-              loading="lazy"
-            />
-          </div>
-          <div class="daily-name">{{ track.title }}</div>
-          <div class="daily-artist">{{ track.artist }}</div>
-        </div>
-      </div>
-    </section>
   </div>
 </template>
 

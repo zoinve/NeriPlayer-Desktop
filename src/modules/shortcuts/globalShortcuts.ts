@@ -20,7 +20,6 @@ export interface ShortcutActions {
   seekBy: (deltaMs: number) => void
   adjustVolume: (delta: number) => void
   toggleMute: () => void
-  toggleNowPlaying: () => void
   closeOverlay: () => boolean
   focusSearch: () => void
   toggleShuffle: () => void
@@ -51,7 +50,7 @@ export function shortcutDescriptors(): ShortcutDescriptor[] {
     { id: 'volume_up', keys: ['↑'] },
     { id: 'volume_down', keys: ['↓'] },
     { id: 'mute', keys: ['M'] },
-    { id: 'now_playing', keys: [`${mod}`, 'P'] },
+    { id: 'global_toggle_play', keys: ['Ctrl', 'Shift', 'P'] },
     { id: 'search', keys: [`${mod}`, 'F'] },
     { id: 'shuffle', keys: ['S'] },
     { id: 'repeat', keys: ['R'] },
@@ -89,9 +88,6 @@ export function installGlobalShortcuts(actions: ShortcutActions): () => void {
           break
         case 'f':
           actions.focusSearch()
-          break
-        case 'p':
-          actions.toggleNowPlaying()
           break
         default:
           return

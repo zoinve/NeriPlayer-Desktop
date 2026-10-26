@@ -20,6 +20,8 @@ export interface PlaybackStatsSnapshot<T extends StatsTrackKey> {
   listenedMs: number
   playCountIncrement: number
   scheduleSync: boolean
+  sessionListenedMs: number
+  reportListenedMs: number
 }
 
 export class PlaybackStatsTracker<T extends StatsTrackKey> {
@@ -28,6 +30,7 @@ export class PlaybackStatsTracker<T extends StatsTrackKey> {
   private segmentStartMs = NO_ACTIVE_SEGMENT
   private accumulatedMs = 0
   private currentPlayListenedMs = 0
+  private reportedCurrentPlayListenedMs = 0
   private playing = false
   private hasCountedCurrentPlay = false
   private lastPositionMs: number | null = null
@@ -51,6 +54,7 @@ export class PlaybackStatsTracker<T extends StatsTrackKey> {
     this.trackingKey = nextKey
     this.accumulatedMs = 0
     this.currentPlayListenedMs = 0
+    this.reportedCurrentPlayListenedMs = 0
     this.hasCountedCurrentPlay = false
     this.lastPositionMs = null
     this.suppressNextPositionWrap = false
@@ -99,6 +103,7 @@ export class PlaybackStatsTracker<T extends StatsTrackKey> {
     const snapshot = this.flush(true, true)
     this.hasCountedCurrentPlay = false
     this.currentPlayListenedMs = 0
+    this.reportedCurrentPlayListenedMs = 0
     this.lastPositionMs = null
     if (this.trackingTrack && this.playing) {
       this.segmentStartMs = this.now()
@@ -152,7 +157,19 @@ export class PlaybackStatsTracker<T extends StatsTrackKey> {
 
     this.accumulatedMs = 0
     if (playCountIncrement > 0) this.hasCountedCurrentPlay = true
-    return { track, listenedMs, playCountIncrement, scheduleSync }
+    const sessionListenedMs = Math.max(0, Math.round(this.currentPlayListenedMs))
+    const reportListenedMs = scheduleSync
+      ? Math.max(0, sessionListenedMs - this.reportedCurrentPlayListenedMs)
+      : 0
+    if (scheduleSync) this.reportedCurrentPlayListenedMs = sessionListenedMs
+    return {
+      track,
+      listenedMs,
+      playCountIncrement,
+      scheduleSync,
+      sessionListenedMs,
+      reportListenedMs,
+    }
   }
 
   private activeSegmentMs(): number {

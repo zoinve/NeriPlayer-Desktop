@@ -54,6 +54,7 @@ export interface AppSettings {
   logToFile: boolean
   logLevel: string
   maxCacheSize: number
+  cacheDir: string
   downloadNameTemplate: string
   downloadDir: string
   ltServerUrl: string
@@ -132,6 +133,7 @@ const DEFAULT_SETTINGS: AppSettings = {
   logToFile: false,
   logLevel: 'info',
   maxCacheSize: 1024,
+  cacheDir: '',
   downloadNameTemplate: DEFAULT_DOWNLOAD_NAME_TEMPLATE,
   downloadDir: '',
   ltServerUrl: 'https://neriplayer.hancat.work',
@@ -193,6 +195,7 @@ const LEGACY_KEYS: Partial<Record<SettingKey, string>> = {
   logToFile: 'log_to_file',
   logLevel: 'log_level',
   maxCacheSize: 'cache_size',
+  cacheDir: 'cache_dir',
   downloadNameTemplate: 'download_template',
   downloadDir: 'download_dir',
   ltServerUrl: 'lt_server_url',
@@ -373,6 +376,7 @@ export const useSettingsStore = defineStore('settings', () => {
   const logToFile = ref(initial.logToFile)
   const logLevel = ref(initial.logLevel)
   const maxCacheSize = ref(initial.maxCacheSize)
+  const cacheDir = ref(initial.cacheDir)
   const downloadNameTemplate = ref(initial.downloadNameTemplate)
   const downloadDir = ref(initial.downloadDir)
   const ltServerUrl = ref(initial.ltServerUrl)
@@ -399,7 +403,7 @@ export const useSettingsStore = defineStore('settings', () => {
     youtubeQuality, biliQuality, bypassProxy, internationalizationEnabled,
     backgroundImageUri, backgroundImageBlur, backgroundImageAlpha, devModeEnabled,
     logToFile, logLevel,
-    maxCacheSize, downloadNameTemplate, downloadDir, ltServerUrl, ltNickname,
+    maxCacheSize, cacheDir, downloadNameTemplate, downloadDir, ltServerUrl, ltNickname,
     ltAllowMemberControl, ltAutoPauseOnMemberChange, ltShareAudioLinks, volume,
     playbackSpeed, loudnessGainMb, equalizerEnabled, equalizerPresetId,
     equalizerBands,
@@ -438,6 +442,16 @@ export const useSettingsStore = defineStore('settings', () => {
     } catch {
       // 浏览器开发模式没有 Rust bridge 时仍保留 localStorage 兼容缓存
     }
+  }
+
+  async function setCacheDir(path: string) {
+    cacheDir.value = path
+    await persistNow()
+  }
+
+  async function resetCacheDir() {
+    cacheDir.value = ''
+    await persistNow()
   }
 
   function schedulePersist() {
@@ -483,9 +497,10 @@ export const useSettingsStore = defineStore('settings', () => {
     dynamicColor, audioReactive, coverBlurBg, coverBlurAmount, coverBlurDarken,
     neteaseQuality, qqMusicQuality, youtubeQuality, biliQuality, bypassProxy,
     internationalizationEnabled, backgroundImageUri, backgroundImageBlur,
-    backgroundImageAlpha, devModeEnabled, logToFile, logLevel, maxCacheSize, downloadNameTemplate,
+    backgroundImageAlpha, devModeEnabled, logToFile, logLevel, maxCacheSize, cacheDir, downloadNameTemplate,
     downloadDir, ltServerUrl, ltNickname, ltAllowMemberControl,
     ltAutoPauseOnMemberChange, ltShareAudioLinks, volume, playbackSpeed,
     loudnessGainMb, equalizerEnabled, equalizerPresetId, equalizerBands,
+    setCacheDir, resetCacheDir,
   }
 })

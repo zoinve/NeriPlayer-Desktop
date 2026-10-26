@@ -344,17 +344,13 @@ onMounted(async () => {
         void player.setVolume(volumeBeforeMute || 0.5)
       }
     },
-    toggleNowPlaying: () => {
-      if (isNowPlayingOpen.value) void closeNowPlaying()
-      else if (player.hasPlaybackSession) openNowPlaying()
-    },
     closeOverlay: () => {
       if (!isNowPlayingOpen.value) return false
       void closeNowPlaying()
       return true
     },
     focusSearch: () => {
-      void router.push({ name: 'explore' }).then(() => {
+      void router.push({ name: 'library' }).then(() => {
         requestAnimationFrame(() => {
           const input = document.querySelector<HTMLInputElement>('[data-shortcut-search]')
           input?.focus()
@@ -390,10 +386,10 @@ onMounted(async () => {
     // 浏览器开发模式没有 Rust bridge 时忽略
   }
 
-  // 并行加载
+  // 红心列表依赖网易云登录态，先恢复账号再初始化远端收藏状态。
+  await authStore.checkStatus()
   await Promise.allSettled([
     syncStore.loadConfigs(),
-    authStore.checkStatus(),
     likedSongs.start(),
   ])
 
@@ -453,7 +449,7 @@ onUnmounted(() => {
     >
       <router-view v-slot="{ Component, route }">
         <transition name="fade" mode="out-in">
-          <keep-alive :include="['HomeView', 'ExploreView', 'LibraryView']">
+          <keep-alive :include="['HomeView', 'NeteaseLibraryView']">
             <component :is="Component" :key="route.path" />
           </keep-alive>
         </transition>
@@ -524,6 +520,10 @@ onUnmounted(() => {
   border-radius: var(--radius-lg);
   padding-top: var(--titlebar-height, 36px); /* 让出顶栏高度（与 TitleBar / mac 红绿灯对齐） */
   isolation: isolate;
+}
+
+.app-layout--np-active {
+  border-radius: 0;
 }
 
 .app-bg-image {

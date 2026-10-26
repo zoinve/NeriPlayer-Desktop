@@ -4,6 +4,8 @@ import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { invoke } from '@tauri-apps/api/core'
 import { usePlayerStore, type TrackInfo } from '@/stores/player'
+import { useRecommendStore } from '@/stores/recommend'
+import { useToastStore } from '@/stores/toast'
 import BilibiliCoverImage from '@/components/BilibiliCoverImage.vue'
 import {
   playlistDetailCacheKey,
@@ -19,6 +21,8 @@ const log = createLogger('netease-artist-view')
 const route = useRoute()
 const router = useRouter()
 const player = usePlayerStore()
+const recommend = useRecommendStore()
+const toast = useToastStore()
 const { t } = useI18n()
 
 interface ArtistHeader {
@@ -51,8 +55,10 @@ const header = ref<ArtistHeader | null>(null)
 const tracks = ref<TrackInfo[]>([])
 const albums = ref<ArtistAlbum[]>([])
 const activeTab = ref<'songs' | 'albums'>('songs')
+const followLoading = ref(false)
 
 const artistId = computed(() => Number(route.params.id) || 0)
+const isFollowed = computed(() => recommend.followedArtists.some(artist => artist.id === artistId.value))
 
 // 大列表窗口渲染, 与歌单详情页同策略
 const RENDER_CHUNK = 100
@@ -105,6 +111,7 @@ async function load() {
       invoke<any>('get_netease_artist_songs', { artistId: id }),
       invoke<any>('get_netease_artist_albums', { artistId: id }),
     ])
+    await recommend.fetchFollowedArtists()
 
     if (detailRes.status === 'fulfilled') {
       header.value = parseHeader(detailRes.value)
@@ -156,6 +163,20 @@ async function load() {
     log.error('load artist failed:', e)
   } finally {
     isLoading.value = false
+  }
+}
+
+async function toggleFollow() {
+  if (!artistId.value || followLoading.value) return
+  followLoading.value = true
+  const followed = !isFollowed.value
+  try {
+    await recommend.setArtistFollowed(artistId.value, followed)
+    toast.success(t(followed ? 'library.artist_followed' : 'library.artist_unfollowed'))
+  } catch (e) {
+    toast.error(String(e))
+  } finally {
+    followLoading.value = false
   }
 }
 
@@ -235,6 +256,10 @@ onMounted(load)
             <button class="play-all-btn" :disabled="!tracks.length" @click="playAll">
               <span class="material-symbols-rounded filled">play_arrow</span>
               {{ t('player.play_all') }}
+            </button>
+            <button class="follow-btn" :class="{ active: isFollowed }" :disabled="followLoading" @click="toggleFollow">
+              <span class="material-symbols-rounded" :class="{ filled: isFollowed }">{{ isFollowed ? 'person_remove' : 'person_add' }}</span>
+              {{ t(isFollowed ? 'library.unfollow_artist' : 'library.follow_artist') }}
             </button>
           </div>
         </div>
@@ -336,6 +361,23 @@ onMounted(load)
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.follow-btn {
+  min-height: 40px;
+  padding: 0 16px;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  border: 1px solid var(--md-outline-variant);
+  border-radius: var(--radius-full);
+  color: var(--md-on-surface);
+
+  &.active {
+    color: var(--md-primary);
+    background: var(--md-primary-container);
+    border-color: transparent;
+  }
 }
 
 // Hero 卡片

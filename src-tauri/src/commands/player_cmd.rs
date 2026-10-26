@@ -7,14 +7,14 @@ use crate::error::{AppError, AppResult};
 use crate::settings::store::{MAX_MEDIA_CACHE_SIZE_MB, MIN_MEDIA_CACHE_SIZE_MB};
 use crate::state::AppState;
 use futures_util::StreamExt;
-use serde::{Deserialize, Serialize};
 use parking_lot::Mutex;
+use serde::{Deserialize, Serialize};
 use std::io::Write;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
-use tauri::{AppHandle, Manager, State};
+use tauri::{AppHandle, State};
 use tokio::io::AsyncWriteExt;
 
 const STREAM_START_BUFFER_BYTES: usize = 64 * 1024;
@@ -597,10 +597,13 @@ pub async fn play_url(
     };
 
     let start = std::time::Instant::now();
-    let resp = state.http().get(&url)
+    let resp = state
+        .http()
+        .get(&url)
         .header("Referer", referer)
         .header("User-Agent", playback_user_agent(&url))
-        .send().await
+        .send()
+        .await
         .map_err(|e| {
             log::error!(
                 target: "play_url",
@@ -684,12 +687,7 @@ pub async fn play_url_fast(
         duration_hint_ms,
     );
     let path = match cache {
-        Some(cache) => download_url_to_playback_cache(
-            &url,
-            &state,
-            cache,
-            request_generation,
-        )
+        Some(cache) => download_url_to_playback_cache(&url, &state, cache, request_generation)
             .await?
             .to_string_lossy()
             .to_string(),
@@ -780,13 +778,15 @@ pub async fn play_url_streaming(
         }
     }
 
-    let fallback_cache = cache.as_ref().and_then(|cache| match cache.fresh_staging() {
-        Ok(cache) => Some(cache),
-        Err(err) => {
-            log::warn!(target: "play_url_streaming", "fallback cache unavailable: {}", err);
-            None
-        }
-    });
+    let fallback_cache = cache
+        .as_ref()
+        .and_then(|cache| match cache.fresh_staging() {
+            Ok(cache) => Some(cache),
+            Err(err) => {
+                log::warn!(target: "play_url_streaming", "fallback cache unavailable: {}", err);
+                None
+            }
+        });
 
     let remote_open_started = std::time::Instant::now();
     log::info!(
@@ -796,14 +796,7 @@ pub async fn play_url_streaming(
         host,
         command_started.elapsed().as_millis(),
     );
-    match open_remote_audio_source(
-        &url,
-        duration_hint_ms,
-        request_generation,
-        &state,
-        cache,
-    )
-    .await
+    match open_remote_audio_source(&url, duration_hint_ms, request_generation, &state, cache).await
     {
         Ok(reader) => {
             log::info!(
@@ -880,13 +873,9 @@ async fn play_url_streaming_fallback(
         // 中途起播也复用本次已创建的隔离 staging，完整下载成功后发布为可复用缓存。
         // 没有缓存配置时才落到临时文件，避免每次 Range 降级都遗留整曲副本
         let path: PathBuf = match cache {
-            Some(cache) => download_url_to_playback_cache(
-                url,
-                state,
-                cache,
-                request_generation,
-            )
-            .await?,
+            Some(cache) => {
+                download_url_to_playback_cache(url, state, cache, request_generation).await?
+            }
             None => download_url_to_temp_audio(url, state, request_generation)
                 .await?
                 .into(),
@@ -905,14 +894,9 @@ async fn play_url_streaming_fallback(
         return Ok(if dur > 0 { dur } else { duration_hint_ms });
     }
 
-    let buffer = start_streaming_download(
-        url,
-        state,
-        "play_url_streaming",
-        request_generation,
-        cache,
-    )
-    .await?;
+    let buffer =
+        start_streaming_download(url, state, "play_url_streaming", request_generation, cache)
+            .await?;
     let buffer_wait_started = std::time::Instant::now();
     log::info!(
         target: "play_url_streaming",
@@ -1090,13 +1074,7 @@ pub async fn crossfade_url(
     state: State<'_, AppState>,
 ) -> AppResult<u64> {
     claim_playback_request(&state, request_generation)?;
-    let data = download_url_bytes(
-        &url,
-        &state,
-        "crossfade_url",
-        request_generation,
-    )
-    .await?;
+    let data = download_url_bytes(&url, &state, "crossfade_url", request_generation).await?;
     ensure_playback_request(&state, request_generation)?;
     run_player_play(Arc::clone(&state.player), move |player| {
         player.request_crossfade_bytes(
@@ -1134,12 +1112,7 @@ pub async fn crossfade_url_fast(
         duration_hint_ms,
     );
     let path = match cache {
-        Some(cache) => download_url_to_playback_cache(
-            &url,
-            &state,
-            cache,
-            request_generation,
-        )
+        Some(cache) => download_url_to_playback_cache(&url, &state, cache, request_generation)
             .await?
             .to_string_lossy()
             .to_string(),
@@ -1223,26 +1196,21 @@ pub async fn crossfade_url_streaming(
         }
     }
 
-    let fallback_cache = cache.as_ref().and_then(|cache| match cache.fresh_staging() {
-        Ok(cache) => Some(cache),
-        Err(err) => {
-            log::warn!(
-                target: "crossfade_url_streaming",
-                "fallback cache unavailable: {}",
-                err
-            );
-            None
-        }
-    });
+    let fallback_cache = cache
+        .as_ref()
+        .and_then(|cache| match cache.fresh_staging() {
+            Ok(cache) => Some(cache),
+            Err(err) => {
+                log::warn!(
+                    target: "crossfade_url_streaming",
+                    "fallback cache unavailable: {}",
+                    err
+                );
+                None
+            }
+        });
 
-    match open_remote_audio_source(
-        &url,
-        duration_hint_ms,
-        request_generation,
-        &state,
-        cache,
-    )
-    .await
+    match open_remote_audio_source(&url, duration_hint_ms, request_generation, &state, cache).await
     {
         Ok(reader) => {
             ensure_playback_request(&state, request_generation)?;
@@ -1453,8 +1421,7 @@ fn playback_cache(
 }
 
 fn playback_cache_root(app: &AppHandle) -> Option<PathBuf> {
-    app.path()
-        .app_cache_dir()
+    crate::settings::store::active_cache_dir(app)
         .ok()
         .map(|dir| dir.join("playback-audio"))
 }
@@ -1468,10 +1435,13 @@ async fn download_url_bytes(
     let start = std::time::Instant::now();
     ensure_playback_request(state, request_generation)?;
     let download = async {
-        let resp = state.http().get(url)
+        let resp = state
+            .http()
+            .get(url)
             .header("Referer", playback_referer(url))
             .header("User-Agent", playback_user_agent(url))
-            .send().await
+            .send()
+            .await
             .map_err(AppError::Network)?;
 
         if !resp.status().is_success() {
@@ -1568,13 +1538,8 @@ async fn download_url_to_playback_cache(
     cache: RemoteAudioCache,
     request_generation: u64,
 ) -> AppResult<PathBuf> {
-    let data = download_url_bytes(
-        url,
-        state,
-        "playback_cache_fallback",
-        request_generation,
-    )
-    .await?;
+    let data =
+        download_url_bytes(url, state, "playback_cache_fallback", request_generation).await?;
     ensure_playback_request(state, request_generation)?;
     tokio::task::spawn_blocking(move || cache.publish_complete_bytes(&data))
         .await
@@ -1598,7 +1563,9 @@ async fn start_streaming_download(
         host,
         cache.is_some(),
     );
-    let request = state.http().get(url)
+    let request = state
+        .http()
+        .get(url)
         .header("Referer", playback_referer(url))
         .header("User-Agent", playback_user_agent(url))
         .send();
@@ -1647,10 +1614,9 @@ async fn start_streaming_download(
     let mut cache_file = match (cache.as_ref(), total_len) {
         (Some(cache), Some(total_len)) => {
             let cache = cache.clone();
-            let prepared = tokio::task::spawn_blocking(move || {
-                cache.prepare_sequential_write(total_len)
-            })
-            .await;
+            let prepared =
+                tokio::task::spawn_blocking(move || cache.prepare_sequential_write(total_len))
+                    .await;
             match prepared {
                 Ok(Ok(path)) => match tokio::fs::OpenOptions::new().write(true).open(path).await {
                     Ok(file) => Some(file),
@@ -1980,7 +1946,10 @@ mod tests {
 
         assert_eq!(request.track_id.as_deref(), Some("netease:42"));
         assert_eq!(request.request_generation, Some(9));
-        assert_eq!(playback_trace_field(request.detail.as_deref()), "first second");
+        assert_eq!(
+            playback_trace_field(request.detail.as_deref()),
+            "first second"
+        );
         assert_eq!(
             playback_trace_field(Some("failed https://media.example/audio?id=secret")),
             "failed [url]",

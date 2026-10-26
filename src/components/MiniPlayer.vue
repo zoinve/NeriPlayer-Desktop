@@ -1,10 +1,8 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { usePlayerStore } from '@/stores/player'
-import { useListenTogetherStore } from '@/stores/listenTogether'
 import { useI18n } from 'vue-i18n'
 import QueuePanel from './QueuePanel.vue'
-import ListenTogetherPanel from './ListenTogetherPanel.vue'
 import BilibiliCoverImage from './BilibiliCoverImage.vue'
 import EditableRangeValue from './ui/EditableRangeValue.vue'
 import { getTrackCoverUrl } from '@/utils/trackCover'
@@ -25,11 +23,9 @@ const props = withDefaults(defineProps<{
   coverFallbackSrc: '',
 })
 const player = usePlayerStore()
-const lt = useListenTogetherStore()
 const { t } = useI18n()
 
 const showQueue = ref(false)
-const showLtPanel = ref(false)
 const showVolumeSlider = ref(false)
 const volumeWrapRef = ref<HTMLDivElement>()
 
@@ -267,7 +263,7 @@ defineExpose({
         </button>
       </div>
 
-      <!-- 右：音量 + 一起听 + 队列 + 展开 -->
+      <!-- 右：音量 + 队列 + 展开 -->
       <div class="mp-right">
         <div ref="volumeWrapRef" class="mp-volume-wrap">
           <button class="mp-tool-btn" :class="{ active: showVolumeSlider }" @click="showVolumeSlider = !showVolumeSlider">
@@ -300,14 +296,7 @@ defineExpose({
             </div>
           </Transition>
         </div>
-        <button
-          class="mp-tool-btn"
-          :class="{ active: lt.isConnected }"
-          @click="showLtPanel = !showLtPanel; if (showLtPanel) showQueue = false"
-        >
-          <span class="material-symbols-rounded">group</span>
-        </button>
-        <button class="mp-tool-btn" @click="showQueue = !showQueue; if (showQueue) showLtPanel = false">
+        <button class="mp-tool-btn" @click="showQueue = !showQueue">
           <span class="material-symbols-rounded">queue_music</span>
         </button>
         <button class="mp-tool-btn" @click="emit('expand')">
@@ -321,8 +310,6 @@ defineExpose({
       <QueuePanel v-if="showQueue" @close="showQueue = false" />
     </Teleport>
 
-    <!-- 一起听弹窗（组件内部自带 Teleport） -->
-    <ListenTogetherPanel v-model:open="showLtPanel" />
   </div>
 </template>
 

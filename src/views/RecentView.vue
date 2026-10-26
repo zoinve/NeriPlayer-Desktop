@@ -1,8 +1,10 @@
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { ref, computed, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { usePlayerStore, type TrackInfo } from '@/stores/player'
 import { useHistoryStore } from '@/stores/history'
+import { useAuthStore } from '@/stores/auth'
+import { useNeteaseHistoryStore, type NeteaseHistoryEntry } from '@/stores/neteaseHistory'
 import { useDownloadStore } from '@/stores/download'
 import { useI18n } from 'vue-i18n'
 import AddToPlaylistDialog from '@/components/AddToPlaylistDialog.vue'
@@ -22,6 +24,8 @@ import { formatTrackDuration as formatDuration } from '@/utils/timeFormat'
 const router = useRouter()
 const player = usePlayerStore()
 const history = useHistoryStore()
+const auth = useAuthStore()
+const neteaseHistory = useNeteaseHistoryStore()
 const downloadStore = useDownloadStore()
 const { t } = useI18n()
 
@@ -34,17 +38,28 @@ const showAddToPlaylist = ref(false)
 const addToPlaylistTarget = ref<TrackInfo | null>(null)
 const addToPlaylistTargets = ref<TrackInfo[]>([])
 
+const isNeteaseSource = computed(() => auth.netease.loggedIn)
+const isRanking = computed(() => isNeteaseSource.value && neteaseHistory.mode === 'ranking')
+const sourceEntries = computed<NeteaseHistoryEntry[]>(() => {
+  if (!isNeteaseSource.value) {
+    return history.entries.map(entry => ({ ...entry, playCount: 0, score: 0 }))
+  }
+  return neteaseHistory.mode === 'recent'
+    ? neteaseHistory.recentEntries
+    : neteaseHistory.rankingEntries[neteaseHistory.rankingPeriod]
+})
+
 const filteredEntries = computed(() => {
-  if (!searchQuery.value) return history.entries
+  if (!searchQuery.value) return sourceEntries.value
   const q = searchQuery.value.toLowerCase()
-  return history.entries.filter(e =>
+  return sourceEntries.value.filter(e =>
     e.track.title.toLowerCase().includes(q) ||
     e.track.artist.toLowerCase().includes(q) ||
     e.track.album.toLowerCase().includes(q)
   )
 })
 
-const allHistoryTracks = computed(() => history.entries.map(entry => entry.track))
+const allHistoryTracks = computed(() => sourceEntries.value.map(entry => entry.track))
 const visibleHistoryTracks = computed(() => filteredEntries.value.map(entry => entry.track))
 const {
   selectionMode,
@@ -106,10 +121,22 @@ function playEntry(index: number) {
 }
 
 function clearHistory() {
+  if (isNeteaseSource.value) return
   history.clear()
   leaveSelectionMode()
   showClearConfirm.value = false
 }
+
+watch(
+  [() => auth.netease.loggedIn, () => neteaseHistory.mode, () => neteaseHistory.rankingPeriod],
+  ([loggedIn], previous) => {
+    searchQuery.value = ''
+    leaveSelectionMode()
+    if (loggedIn) void neteaseHistory.refresh()
+    else if (previous?.[0]) neteaseHistory.reset()
+  },
+  { immediate: true },
+)
 
 function openTrackMenu(e: MouseEvent, track: TrackInfo) {
   if (selectionMode.value) {
@@ -214,13 +241,37 @@ function handleTrackMenuClick(item: ContextMenuActionItem) {
         <span class="material-symbols-rounded">arrow_back</span>
       </button>
       <h2 class="header-title">{{ t('home.recent_play') }}</h2>
-      <div class="header-search" v-if="history.entries.length > 0">
+      <div class="header-search" v-if="sourceEntries.length > 0">
         <span class="material-symbols-rounded search-icon">search</span>
         <input v-model="searchQuery" :placeholder="t('player.search_tracks')" class="search-input" />
       </div>
     </header>
 
-    <div v-if="history.entries.length === 0" class="state-center">
+    <div v-if="isNeteaseSource" class="source-controls">
+      <div class="segmented-control">
+        <button :class="{ active: neteaseHistory.mode === 'recent' }" @click="neteaseHistory.mode = 'recent'">{{ t('recent.server_recent') }}</button>
+        <button :class="{ active: neteaseHistory.mode === 'ranking' }" @click="neteaseHistory.mode = 'ranking'">{{ t('recent.ranking') }}</button>
+      </div>
+      <div v-if="isRanking" class="segmented-control compact">
+        <button :class="{ active: neteaseHistory.rankingPeriod === 'week' }" @click="neteaseHistory.rankingPeriod = 'week'">{{ t('recent.ranking_week') }}</button>
+        <button :class="{ active: neteaseHistory.rankingPeriod === 'all' }" @click="neteaseHistory.rankingPeriod = 'all'">{{ t('recent.ranking_all') }}</button>
+      </div>
+      <button class="action-btn" :disabled="neteaseHistory.loading" :title="t('common.refresh')" @click="neteaseHistory.refresh()">
+        <span class="material-symbols-rounded" :class="{ spinning: neteaseHistory.loading }">refresh</span>
+      </button>
+    </div>
+
+    <div v-if="isNeteaseSource && neteaseHistory.loading && sourceEntries.length === 0" class="state-center">
+      <span class="material-symbols-rounded spinning" style="font-size: 36px">progress_activity</span>
+    </div>
+
+    <div v-else-if="isNeteaseSource && neteaseHistory.error && sourceEntries.length === 0" class="state-center">
+      <span class="material-symbols-rounded" style="font-size: 48px; opacity: 0.35">cloud_off</span>
+      <p>{{ t('recent.server_error') }}</p>
+      <button class="retry-btn" @click="neteaseHistory.refresh()">{{ t('common.retry') }}</button>
+    </div>
+
+    <div v-else-if="sourceEntries.length === 0" class="state-center">
       <span class="material-symbols-rounded" style="font-size: 48px; opacity: 0.2">history</span>
       <p>{{ t('recent.no_history') }}</p>
     </div>
@@ -238,7 +289,7 @@ function handleTrackMenuClick(item: ContextMenuActionItem) {
           <span class="material-symbols-rounded">checklist</span>
         </button>
         <div style="flex:1" />
-        <button class="action-btn danger" @click="showClearConfirm = true">
+        <button v-if="!isNeteaseSource" class="action-btn danger" @click="showClearConfirm = true">
           <span class="material-symbols-rounded">delete_sweep</span>
         </button>
       </div>
@@ -281,12 +332,13 @@ function handleTrackMenuClick(item: ContextMenuActionItem) {
             <div class="track-title">{{ entry.track.title }}</div>
             <div class="track-meta">{{ entry.track.artist }}<template v-if="entry.track.album"> · {{ entry.track.album }}</template></div>
           </div>
-          <div class="track-time-ago">{{ formatRelativeTime(entry.playedAt) }}</div>
+          <div v-if="isRanking" class="track-time-ago ranking-count">{{ t('recent.play_count', { count: entry.playCount }) }}</div>
+          <div v-else class="track-time-ago">{{ formatRelativeTime(entry.playedAt) }}</div>
           <div class="track-duration">{{ formatDuration(entry.track.durationMs) }}</div>
           <button v-if="!selectionMode" class="track-more" @click.stop="openTrackMenu($event, entry.track)">
             <span class="material-symbols-rounded">more_vert</span>
           </button>
-          <button v-if="!selectionMode" class="track-remove" @click.stop="history.remove(entry.track.id)">
+          <button v-if="!selectionMode && !isNeteaseSource" class="track-remove" @click.stop="history.remove(entry.track.id)">
             <span class="material-symbols-rounded">close</span>
           </button>
         </div>
@@ -335,6 +387,48 @@ function handleTrackMenuClick(item: ContextMenuActionItem) {
   flex-shrink: 0;
 }
 
+.source-controls {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 16px;
+}
+
+.segmented-control {
+  display: flex;
+  gap: 2px;
+  padding: 3px;
+  border-radius: var(--radius-md);
+  background: var(--md-surface-container);
+
+  button {
+    min-height: 34px;
+    padding: 0 14px;
+    border-radius: var(--radius-sm);
+    color: var(--md-on-surface-variant);
+    font-size: 13px;
+
+    &.active {
+      color: var(--md-on-secondary-container);
+      background: var(--md-secondary-container);
+      font-weight: 600;
+    }
+  }
+
+  &.compact { margin-left: auto; }
+}
+
+.retry-btn {
+  min-height: 38px;
+  padding: 0 18px;
+  border-radius: var(--radius-md);
+  color: var(--md-on-primary);
+  background: var(--md-primary);
+}
+
+.spinning { animation: spin 1s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
 .recent-actions {
   display: flex;
   align-items: center;
@@ -364,6 +458,14 @@ function handleTrackMenuClick(item: ContextMenuActionItem) {
   flex-shrink: 0;
   min-width: 60px;
   text-align: right;
+}
+
+.ranking-count { min-width: 90px; opacity: .75; }
+
+@media (max-width: 720px) {
+  .source-controls { flex-wrap: wrap; }
+  .segmented-control.compact { margin-left: 0; }
+  .source-controls > .action-btn { margin-left: auto; }
 }
 
 .track-remove {

@@ -139,16 +139,16 @@ fn collapse_empty_name_separators(s: &str) -> String {
     // 移除空的 []/() 及其内部空白
     for _ in 0..3 {
         out = out.replace("[]", "").replace("()", "");
-        out = out
-            .split_whitespace()
-            .collect::<Vec<_>>()
-            .join(" ");
+        out = out.split_whitespace().collect::<Vec<_>>().join(" ");
     }
     // 折叠连续 " - " 分隔符并去首尾分隔符/空白
     while out.contains("-  -") || out.contains("- -") {
         out = out.replace("-  -", "-").replace("- -", "-");
     }
-    out.trim().trim_matches(|c| c == '-' || c == ' ').trim().to_string()
+    out.trim()
+        .trim_matches(|c| c == '-' || c == ' ')
+        .trim()
+        .to_string()
 }
 fn ext_from_content_type(content_type: &str) -> &str {
     if content_type.contains("mp4") || content_type.contains("m4a") || content_type.contains("aac")
@@ -253,7 +253,9 @@ async fn write_download_sidecars(
 
     // 歌词 sidecar
     let lyrics_manager = LyricsManager::new(client);
-    let youtube_video_id = track_id.strip_prefix("youtube:").filter(|id| !id.is_empty());
+    let youtube_video_id = track_id
+        .strip_prefix("youtube:")
+        .filter(|id| !id.is_empty());
     let lyrics = lyrics_manager
         .fetch_lyrics(
             title,
@@ -546,10 +548,15 @@ fn has_ambiguous_legacy_sidecar(audio_path: &std::path::Path) -> bool {
         path != audio_path
             && path.is_file()
             && path.file_stem() == Some(stem)
-            && path.extension().and_then(|ext| ext.to_str()).is_some_and(|ext| {
-                let lower = ext.to_ascii_lowercase();
-                !DOWNLOAD_SIDECAR_SUFFIXES.iter().any(|suffix| *suffix == lower)
-            })
+            && path
+                .extension()
+                .and_then(|ext| ext.to_str())
+                .is_some_and(|ext| {
+                    let lower = ext.to_ascii_lowercase();
+                    !DOWNLOAD_SIDECAR_SUFFIXES
+                        .iter()
+                        .any(|suffix| *suffix == lower)
+                })
     })
 }
 
@@ -633,7 +640,8 @@ fn sweep_stale_download_markers(dirs: impl IntoIterator<Item = PathBuf>) -> usiz
             let stale = marker_is_stale(&path, STALE_AFTER);
             // reservation 只在任务启动时写入，长下载中自身会超过阈值。
             // 只要同名 part 仍在持续写入，就不能把 reservation 当成崩溃残留删掉
-            let active_reservation = path.extension().and_then(|ext| ext.to_str()) == Some("reserve")
+            let active_reservation = path.extension().and_then(|ext| ext.to_str())
+                == Some("reserve")
                 && reserve_has_fresh_part(&path, STALE_AFTER);
             if stale && !active_reservation && std::fs::remove_file(&path).is_ok() {
                 removed += 1;
@@ -808,8 +816,14 @@ async fn perform_download(
     let ext = ext_from_content_type(&content_type);
 
     // 构造文件名：使用模板
-    let base_name =
-        render_download_filename(&title, &artist, &album, &source, &track_id, name_template.as_deref());
+    let base_name = render_download_filename(
+        &title,
+        &artist,
+        &album,
+        &source,
+        &track_id,
+        name_template.as_deref(),
+    );
 
     let dir = downloads_dir(&app, download_dir.as_deref())?;
     // 每次下载开始顺带清扫目标目录的崩溃遗留 .part 和 .reserve: validate 的 sweep
@@ -1220,9 +1234,18 @@ mod tests {
     /// 非法字符、控制字符替换为下划线，键盘可见字符原样保留
     #[test]
     fn sanitize_replaces_illegal_and_control_chars() {
-        assert_eq!(sanitize_filename("a/b\\c:d*e?f\"g<h>i|j"), "a_b_c_d_e_f_g_h_i_j");
-        assert_eq!(sanitize_filename("bad\u{0}name\u{1f}\ttail"), "bad_name__tail");
-        assert_eq!(sanitize_filename("正常 - 歌名 (Live)"), "正常 - 歌名 (Live)");
+        assert_eq!(
+            sanitize_filename("a/b\\c:d*e?f\"g<h>i|j"),
+            "a_b_c_d_e_f_g_h_i_j"
+        );
+        assert_eq!(
+            sanitize_filename("bad\u{0}name\u{1f}\ttail"),
+            "bad_name__tail"
+        );
+        assert_eq!(
+            sanitize_filename("正常 - 歌名 (Live)"),
+            "正常 - 歌名 (Live)"
+        );
     }
 
     /// Windows 不允许结尾的点与空格
@@ -1249,7 +1272,10 @@ mod tests {
     #[test]
     fn sanitize_truncates_stem_to_180_bytes_at_char_boundary() {
         let long_ascii = "a".repeat(400);
-        assert_eq!(sanitize_filename(&long_ascii).len(), MAX_FILENAME_STEM_BYTES);
+        assert_eq!(
+            sanitize_filename(&long_ascii).len(),
+            MAX_FILENAME_STEM_BYTES
+        );
 
         // 中文 3 字节/字：180/3=60 字整除；用 61+ 字验证边界处理
         let long_cjk = "歌".repeat(100);
@@ -1285,7 +1311,10 @@ mod tests {
         std::fs::write(&audio, b"x").unwrap();
         // 把 stale 的 mtime 拨回 2 小时前
         let old_time = std::time::SystemTime::now() - Duration::from_secs(7_200);
-        let file = std::fs::OpenOptions::new().write(true).open(&stale).unwrap();
+        let file = std::fs::OpenOptions::new()
+            .write(true)
+            .open(&stale)
+            .unwrap();
         file.set_modified(old_time).unwrap();
         drop(file);
         let file = std::fs::OpenOptions::new()

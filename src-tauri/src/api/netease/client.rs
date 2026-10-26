@@ -2,11 +2,12 @@
 use reqwest::{cookie::Jar, Client};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use std::collections::HashSet;
 use std::sync::Arc;
 
-use crate::error::{AppError, AppResult};
 use super::crypto;
 use crate::api::transport::{parse_json_response, FallbackHttp};
+use crate::error::{AppError, AppResult};
 
 const BASE_URL: &str = "https://music.163.com";
 
@@ -128,7 +129,8 @@ impl NeteaseClient {
 
     /// WEAPI POST 写接口（非幂等）：只在连接失败时兜底，避免超时重发造成重复提交
     async fn weapi_post_write(&self, url: &str, params: &Value) -> AppResult<Value> {
-        self.weapi_request(url, params, false).await
+        let body = self.weapi_request(url, params, false).await?;
+        validate_write_response(body)
     }
 
     /// WEAPI POST 公共实现；`idempotent` 决定传输层是否允许超时重试
@@ -157,7 +159,12 @@ impl NeteaseClient {
     }
 
     /// 搜索歌曲
-    pub async fn search(&self, keyword: &str, limit: u32, offset: u32) -> AppResult<Vec<NeteaseSearchResult>> {
+    pub async fn search(
+        &self,
+        keyword: &str,
+        limit: u32,
+        offset: u32,
+    ) -> AppResult<Vec<NeteaseSearchResult>> {
         let params = json!({
             "s": keyword,
             "type": "1",
@@ -166,27 +173,31 @@ impl NeteaseClient {
             "total": "true"
         });
 
-        let body = self.weapi_post(
-            &format!("{}/weapi/cloudsearch/get/web", BASE_URL),
-            &params,
-        ).await?;
+        let body = self
+            .weapi_post(&format!("{}/weapi/cloudsearch/get/web", BASE_URL), &params)
+            .await?;
 
-        let songs = body["result"]["songs"].as_array()
+        let songs = body["result"]["songs"]
+            .as_array()
             .ok_or_else(|| AppError::Api("No search results".into()))?;
 
-        let results = songs.iter().filter_map(|s| {
-            Some(NeteaseSearchResult {
-                id: s["id"].as_u64()?,
-                name: s["name"].as_str()?.to_string(),
-                artists: s["ar"].as_array()?
-                    .iter()
-                    .filter_map(|a| a["name"].as_str().map(String::from))
-                    .collect(),
-                album: s["al"]["name"].as_str().unwrap_or("").to_string(),
-                duration_ms: s["dt"].as_u64().unwrap_or(0),
-                cover_url: s["al"]["picUrl"].as_str().map(String::from),
+        let results = songs
+            .iter()
+            .filter_map(|s| {
+                Some(NeteaseSearchResult {
+                    id: s["id"].as_u64()?,
+                    name: s["name"].as_str()?.to_string(),
+                    artists: s["ar"]
+                        .as_array()?
+                        .iter()
+                        .filter_map(|a| a["name"].as_str().map(String::from))
+                        .collect(),
+                    album: s["al"]["name"].as_str().unwrap_or("").to_string(),
+                    duration_ms: s["dt"].as_u64().unwrap_or(0),
+                    cover_url: s["al"]["picUrl"].as_str().map(String::from),
+                })
             })
-        }).collect();
+            .collect();
 
         Ok(results)
     }
@@ -214,10 +225,12 @@ impl NeteaseClient {
 
         log::debug!(target: "netease", "get_song_url: id={}, level={}", song_id, level);
 
-        let mut body = self.weapi_post(
-            &format!("{}/weapi/song/enhance/player/url/v1", BASE_URL),
-            &params,
-        ).await?;
+        let mut body = self
+            .weapi_post(
+                &format!("{}/weapi/song/enhance/player/url/v1", BASE_URL),
+                &params,
+            )
+            .await?;
 
         log::debug!(target: "netease", "song url response code: {:?}", body["code"]);
 
@@ -245,8 +258,10 @@ impl NeteaseClient {
         // 使用 v1 端点获取逐字歌词支持
         // tv/yv/ytv 显式请求翻译、逐字与翻译逐字字段；网易云在省略或传 0
         // 时可能省略 romalrc/ytlrc，导致音译链路只能偶发命中
-        let url = format!("{}/api/song/lyric/v1?id={}&cp=false&lv=0&tv=1&rv=0&kv=0&yv=1&ytv=1&yrv=0",
-            BASE_URL, song_id);
+        let url = format!(
+            "{}/api/song/lyric/v1?id={}&cp=false&lv=0&tv=1&rv=0&kv=0&yv=1&ytv=1&yrv=0",
+            BASE_URL, song_id
+        );
 
         log::debug!(target: "netease", "get_lyrics: id={}", song_id);
 
@@ -304,15 +319,14 @@ impl NeteaseClient {
 
     /// 获取歌曲详情
     pub async fn get_song_detail(&self, song_ids: &[u64]) -> AppResult<Value> {
-        let c: Vec<Value> = song_ids.iter()
-            .map(|id| json!({"id": id}))
-            .collect();
+        let c: Vec<Value> = song_ids.iter().map(|id| json!({"id": id})).collect();
         let params = json!({
             "c": serde_json::to_string(&c).unwrap_or_default(),
             "ids": serde_json::to_string(&song_ids).unwrap_or_default()
         });
 
-        self.weapi_post(&format!("{}/weapi/v3/song/detail", BASE_URL), &params).await
+        self.weapi_post(&format!("{}/weapi/v3/song/detail", BASE_URL), &params)
+            .await
     }
 
     /// 获取歌单详情
@@ -323,10 +337,8 @@ impl NeteaseClient {
             "s": 8
         });
 
-        self.weapi_post(
-            &format!("{}/weapi/v3/playlist/detail", BASE_URL),
-            &params,
-        ).await
+        self.weapi_post(&format!("{}/weapi/v3/playlist/detail", BASE_URL), &params)
+            .await
     }
 
     // 需要登录的 API
@@ -335,7 +347,8 @@ impl NeteaseClient {
         self.weapi_post(
             &format!("{}/weapi/w/nuser/account/get", BASE_URL),
             &json!({}),
-        ).await
+        )
+        .await
     }
 
     /// 获取用户歌单列表
@@ -348,7 +361,154 @@ impl NeteaseClient {
                 "limit": limit.to_string(),
                 "includeVideo": "true"
             }),
-        ).await
+        )
+        .await
+    }
+
+    /// 获取用户听歌排行。type: 0=全部时间，1=最近一周。
+    pub async fn get_user_record(&self, uid: u64, record_type: u8) -> AppResult<Value> {
+        self.weapi_post(
+            &format!("{}/weapi/v1/play/record", BASE_URL),
+            &json!({
+                "uid": uid.to_string(),
+                "type": record_type.min(1).to_string()
+            }),
+        )
+        .await
+    }
+
+    /// 获取网易云服务端最近播放歌曲。
+    pub async fn get_recent_play_songs(&self, limit: u32) -> AppResult<Value> {
+        self.weapi_post(
+            &format!("{}/weapi/play-record/song/list", BASE_URL),
+            &json!({ "limit": limit.clamp(1, 1000).to_string() }),
+        )
+        .await
+    }
+
+    /// 订阅歌单
+    pub async fn subscribe_playlist(&self, playlist_id: u64) -> AppResult<Value> {
+        self.weapi_post_write(
+            &format!("{}/weapi/playlist/subscribe", BASE_URL),
+            &json!({ "id": playlist_id.to_string() }),
+        )
+        .await
+    }
+
+    /// 取消订阅歌单
+    pub async fn unsubscribe_playlist(&self, playlist_id: u64) -> AppResult<Value> {
+        self.weapi_post_write(
+            &format!("{}/weapi/playlist/unsubscribe", BASE_URL),
+            &json!({ "id": playlist_id.to_string() }),
+        )
+        .await
+    }
+
+    /// 关注艺人
+    pub async fn follow_artist(&self, artist_id: u64) -> AppResult<Value> {
+        self.update_artist_subscription(artist_id, true).await
+    }
+
+    /// 取消关注艺人
+    pub async fn unfollow_artist(&self, artist_id: u64) -> AppResult<Value> {
+        self.update_artist_subscription(artist_id, false).await
+    }
+
+    async fn update_artist_subscription(
+        &self,
+        artist_id: u64,
+        subscribe: bool,
+    ) -> AppResult<Value> {
+        let action = if subscribe { "sub" } else { "unsub" };
+        self.weapi_post_write(
+            &format!("{}/weapi/artist/{}", BASE_URL, action),
+            &json!({
+                "artistId": artist_id.to_string(),
+                "artistIds": format!("[{}]", artist_id)
+            }),
+        )
+        .await
+    }
+
+    /// 获取已关注艺人
+    pub async fn get_followed_artists(&self, offset: u32, limit: u32) -> AppResult<Value> {
+        self.weapi_post(
+            &format!("{}/weapi/artist/sublist", BASE_URL),
+            &json!({
+                "offset": offset.to_string(),
+                "limit": limit.to_string(),
+                "total": "true"
+            }),
+        )
+        .await
+    }
+
+    /// 批量向云歌单添加歌曲
+    pub async fn add_songs_to_playlist(
+        &self,
+        playlist_id: u64,
+        song_ids: &[u64],
+    ) -> AppResult<Value> {
+        self.manipulate_playlist_tracks(playlist_id, song_ids, "add")
+            .await
+    }
+
+    /// 批量从云歌单删除歌曲
+    pub async fn remove_songs_from_playlist(
+        &self,
+        playlist_id: u64,
+        song_ids: &[u64],
+    ) -> AppResult<Value> {
+        self.manipulate_playlist_tracks(playlist_id, song_ids, "del")
+            .await
+    }
+
+    async fn manipulate_playlist_tracks(
+        &self,
+        playlist_id: u64,
+        song_ids: &[u64],
+        op: &str,
+    ) -> AppResult<Value> {
+        let params = playlist_tracks_params(playlist_id, song_ids, op)?;
+        self.weapi_post_write(
+            &format!("{}/weapi/playlist/manipulate/tracks", BASE_URL),
+            &params,
+        )
+        .await
+    }
+
+    /// 创建云歌单
+    pub async fn create_cloud_playlist(&self, name: &str) -> AppResult<Value> {
+        self.weapi_post_write(
+            &format!("{}/weapi/playlist/create", BASE_URL),
+            &json!({
+                "name": name,
+                "privacy": "0",
+                "type": "NORMAL"
+            }),
+        )
+        .await
+    }
+
+    /// 删除云歌单
+    pub async fn delete_cloud_playlist(&self, playlist_id: u64) -> AppResult<Value> {
+        self.weapi_post_write(
+            &format!("{}/weapi/playlist/remove", BASE_URL),
+            &json!({ "ids": format!("[{}]", playlist_id) }),
+        )
+        .await
+    }
+
+    /// 重命名云歌单
+    pub async fn rename_cloud_playlist(&self, playlist_id: u64, name: &str) -> AppResult<Value> {
+        self.weapi_post_write(
+            &format!("{}/weapi/playlist/update/name", BASE_URL),
+            &json!({
+                "id": playlist_id.to_string(),
+                "name": name
+            }),
+        )
+        .await
     }
 
     /// 个性化推荐歌单（需登录）
@@ -356,7 +516,8 @@ impl NeteaseClient {
         self.weapi_post(
             &format!("{}/weapi/personalized/playlist", BASE_URL),
             &json!({ "limit": limit.to_string() }),
-        ).await
+        )
+        .await
     }
 
     /// 每日推荐歌曲（需登录）
@@ -364,7 +525,8 @@ impl NeteaseClient {
         self.weapi_post(
             &format!("{}/weapi/v3/discovery/recommend/songs", BASE_URL),
             &json!({}),
-        ).await
+        )
+        .await
     }
 
     /// 精品歌单（按分类）
@@ -377,7 +539,8 @@ impl NeteaseClient {
                 "lasttime": 0,
                 "total": true
             }),
-        ).await
+        )
+        .await
     }
 
     /// 用户喜欢的歌曲 ID 列表
@@ -385,7 +548,8 @@ impl NeteaseClient {
         self.weapi_post(
             &format!("{}/weapi/song/like/get", BASE_URL),
             &json!({ "uid": uid.to_string() }),
-        ).await
+        )
+        .await
     }
 
     /// 喜欢/取消喜欢歌曲
@@ -398,11 +562,16 @@ impl NeteaseClient {
                 "alg": "itembased",
                 "time": "3"
             }),
-        ).await
+        )
+        .await
     }
 
     /// 获取歌曲下载 URL（WEAPI）
-    pub async fn get_song_download_url(&self, song_id: u64, quality: &str) -> AppResult<NeteaseSongUrl> {
+    pub async fn get_song_download_url(
+        &self,
+        song_id: u64,
+        quality: &str,
+    ) -> AppResult<NeteaseSongUrl> {
         let br = match quality {
             "standard" => 128000,
             "high" | "higher" => 192000,
@@ -418,10 +587,12 @@ impl NeteaseClient {
             "csrf_token": ""
         });
 
-        let body = self.weapi_post(
-            &format!("{}/weapi/song/enhance/download/url", BASE_URL),
-            &params,
-        ).await?;
+        let body = self
+            .weapi_post(
+                &format!("{}/weapi/song/enhance/download/url", BASE_URL),
+                &params,
+            )
+            .await?;
         let data = &body["data"];
 
         Ok(NeteaseSongUrl {
@@ -451,7 +622,12 @@ impl NeteaseClient {
     }
 
     /// 歌手专辑列表 (对齐 Android getArtistAlbums: /api/artist/albums/{id})
-    pub async fn get_artist_albums(&self, artist_id: u64, offset: u32, limit: u32) -> AppResult<Value> {
+    pub async fn get_artist_albums(
+        &self,
+        artist_id: u64,
+        offset: u32,
+        limit: u32,
+    ) -> AppResult<Value> {
         let resp = self
             .send_with_fallback(|client| {
                 client
@@ -513,7 +689,8 @@ impl NeteaseClient {
         self.weapi_post(
             &format!("{}/weapi/playlist/highquality/tags", BASE_URL),
             &json!({}),
-        ).await
+        )
+        .await
     }
 
     /// 获取用户收藏的专辑列表
@@ -524,11 +701,51 @@ impl NeteaseClient {
             "total": "true",
             "csrf_token": ""
         });
-        self.weapi_post(
-            &format!("{}/weapi/album/sublist", BASE_URL),
-            &params,
-        ).await
+        self.weapi_post(&format!("{}/weapi/album/sublist", BASE_URL), &params)
+            .await
     }
+}
+
+fn playlist_tracks_params(playlist_id: u64, song_ids: &[u64], op: &str) -> AppResult<Value> {
+    let mut seen = HashSet::new();
+    let song_ids: Vec<u64> = song_ids
+        .iter()
+        .copied()
+        .filter(|id| *id != 0 && seen.insert(*id))
+        .collect();
+    if song_ids.is_empty() {
+        return Err(AppError::Api("No valid Netease song IDs provided".into()));
+    }
+
+    Ok(json!({
+        "op": op,
+        "pid": playlist_id.to_string(),
+        "id": playlist_id.to_string(),
+        "tracks": song_ids.iter().map(u64::to_string).collect::<Vec<_>>().join(","),
+        "trackIds": serde_json::to_string(&song_ids)?,
+        "imme": "true"
+    }))
+}
+
+fn validate_write_response(body: Value) -> AppResult<Value> {
+    let code = body["code"]
+        .as_i64()
+        .or_else(|| body["code"].as_str().and_then(|value| value.parse().ok()));
+    if code == Some(200) {
+        return Ok(body);
+    }
+
+    let message = body["message"]
+        .as_str()
+        .or_else(|| body["msg"].as_str())
+        .unwrap_or("unknown server error");
+    let code = code
+        .map(|value| value.to_string())
+        .unwrap_or_else(|| "missing".into());
+    Err(AppError::Api(format!(
+        "Netease write API code {}: {}",
+        code, message
+    )))
 }
 
 fn parse_song_url_response(body: &Value) -> NeteaseSongUrl {
@@ -609,7 +826,8 @@ fn json_u64(value: &Value) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::{
-        parse_song_url_response, NeteaseClient, NeteasePlaybackUnavailableReason,
+        parse_song_url_response, playlist_tracks_params, validate_write_response, NeteaseClient,
+        NeteasePlaybackUnavailableReason,
     };
     use crate::api::transport::FallbackHttp;
     use reqwest::cookie::Jar;
@@ -706,5 +924,42 @@ mod tests {
             result.unavailable_reason,
             Some(NeteasePlaybackUnavailableReason::NoPlayUrl)
         );
+    }
+
+    #[test]
+    fn playlist_tracks_params_filter_and_deduplicate_song_ids() {
+        let params = playlist_tracks_params(42, &[0, 7, 7, 9, 0, 7], "add").unwrap();
+
+        assert_eq!(params["op"], "add");
+        assert_eq!(params["pid"], "42");
+        assert_eq!(params["id"], "42");
+        assert_eq!(params["tracks"], "7,9");
+        assert_eq!(params["trackIds"], "[7,9]");
+        assert_eq!(params["imme"], "true");
+    }
+
+    #[test]
+    fn playlist_tracks_params_reject_empty_filtered_ids() {
+        let error = playlist_tracks_params(42, &[0, 0], "del").unwrap_err();
+
+        assert!(error.to_string().contains("No valid Netease song IDs"));
+    }
+
+    #[test]
+    fn write_response_rejects_business_error_with_server_message() {
+        let error = validate_write_response(json!({
+            "code": 400,
+            "message": "playlist is read-only"
+        }))
+        .unwrap_err();
+
+        let message = error.to_string();
+        assert!(message.contains("400"));
+        assert!(message.contains("playlist is read-only"));
+    }
+
+    #[test]
+    fn write_response_accepts_numeric_string_success_code() {
+        assert!(validate_write_response(json!({ "code": "200" })).is_ok());
     }
 }

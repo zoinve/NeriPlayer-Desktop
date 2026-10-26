@@ -1,4 +1,5 @@
 use crate::error::AppResult;
+use crate::settings::store;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::fs;
@@ -79,32 +80,18 @@ pub async fn get_storage_usage(
     download_dir: Option<String>,
 ) -> AppResult<StorageUsageSummary> {
     let app_data_dir = app.path().app_data_dir().ok();
-    let app_cache_dir = app.path().app_cache_dir().ok();
+    let app_cache_dirs = store::cache_roots(&app)?;
     let default_download_dir = app_data_dir.as_ref().map(|dir| dir.join("downloads"));
     let download_roots = download_roots(default_download_dir.as_deref(), download_dir.as_deref());
 
-    let playback_cache = app_cache_dir.as_ref().map(|dir| dir.join("playback-audio"));
-    let image_cache = child_paths(
-        app_data_dir.as_deref(),
-        &["covers", "thumbnails"],
-    );
-    let image_cache = append_child_path(
-        image_cache,
-        app_cache_dir.as_deref(),
-        "image_cache",
-    );
+    let playback_cache = child_paths_many(&app_cache_dirs, &["playback-audio"]);
+    let image_cache = child_paths(app_data_dir.as_deref(), &["covers", "thumbnails"]);
+    let image_cache = append_child_paths(image_cache, &app_cache_dirs, "image_cache");
     let download_staging = child_paths(app_data_dir.as_deref(), &["temp"]);
-    let download_staging = append_child_path(
-        download_staging,
-        app_cache_dir.as_deref(),
-        "download_staging",
-    );
+    let download_staging =
+        append_child_paths(download_staging, &app_cache_dirs, "download_staging");
     let shared_media = child_paths(app_data_dir.as_deref(), &["shared_media"]);
-    let shared_media = append_child_path(
-        shared_media,
-        app_cache_dir.as_deref(),
-        "shared_media_exports",
-    );
+    let shared_media = append_child_paths(shared_media, &app_cache_dirs, "shared_media_exports");
     let platform_list = child_paths(
         app_data_dir.as_deref(),
         &[
@@ -117,14 +104,12 @@ pub async fn get_storage_usage(
     classified_cache_paths.extend(download_staging.iter().cloned());
     classified_cache_paths.extend(shared_media.iter().cloned());
     classified_cache_paths.extend(platform_list.iter().cloned());
-    if let Some(path) = playback_cache.as_ref() {
-        classified_cache_paths.push(path.clone());
-    }
+    classified_cache_paths.extend(playback_cache.iter().cloned());
 
     let mut sections = vec![StorageUsageSection {
         id: "cleanable_cache".into(),
         items: vec![
-            usage_item("audio_cache", playback_cache.as_deref(), Some("audio")),
+            aggregate_item("audio_cache", &playback_cache, Some("audio")),
             aggregate_item("image_cache", &image_cache, Some("image")),
             aggregate_item(
                 "download_staging",
@@ -133,7 +118,7 @@ pub async fn get_storage_usage(
             ),
             aggregate_item("shared_media", &shared_media, Some("shared_media")),
             aggregate_item("platform_list_cache", &platform_list, Some("platform_list")),
-            other_cache_item(app_cache_dir.as_deref(), &classified_cache_paths),
+            other_cache_item(&app_cache_dirs, &classified_cache_paths),
         ],
     }];
 
@@ -143,7 +128,11 @@ pub async fn get_storage_usage(
         items: vec![
             stats_item("downloaded_music", downloads.music, None, None),
             stats_item("downloaded_lyrics", downloads.lyrics, None, None),
-            aggregate_item("download_index", &download_index_paths(&download_roots), None),
+            aggregate_item(
+                "download_index",
+                &download_index_paths(&download_roots),
+                None,
+            ),
         ],
     });
 
@@ -155,18 +144,14 @@ pub async fn get_storage_usage(
         id: "diagnostics".into(),
         items: vec![
             aggregate_item("logs", &diagnostics[..2.min(diagnostics.len())], None),
-            aggregate_item(
-                "crash_logs",
-                &diagnostics[2.min(diagnostics.len())..],
-                None,
-            ),
+            aggregate_item("crash_logs", &diagnostics[2.min(diagnostics.len())..], None),
         ],
     });
 
     let local_covers = app_data_dir.as_ref().map(|dir| dir.join("local-covers"));
     let custom_background = app_data_dir.as_ref().map(|dir| dir.join("background"));
-    let playlist_data = dirs_next::data_dir()
-        .map(|dir| dir.join("NeriPlayer").join("playlists.json"));
+    let playlist_data =
+        dirs_next::data_dir().map(|dir| dir.join("NeriPlayer").join("playlists.json"));
     let known_data = known_data_paths(
         &image_cache,
         &download_staging,
@@ -211,21 +196,21 @@ pub async fn clear_storage_cache(
     options: StorageCacheClearOptions,
 ) -> AppResult<StorageClearResult> {
     let app_data_dir = app.path().app_data_dir().ok();
-    let app_cache_dir = app.path().app_cache_dir().ok();
-    let playback_cache = app_cache_dir.as_ref().map(|dir| dir.join("playback-audio"));
-    let image_cache = append_child_path(
+    let app_cache_dirs = store::cache_roots(&app)?;
+    let playback_cache = child_paths_many(&app_cache_dirs, &["playback-audio"]);
+    let image_cache = append_child_paths(
         child_paths(app_data_dir.as_deref(), &["covers", "thumbnails"]),
-        app_cache_dir.as_deref(),
+        &app_cache_dirs,
         "image_cache",
     );
-    let download_staging = append_child_path(
+    let download_staging = append_child_paths(
         child_paths(app_data_dir.as_deref(), &["temp"]),
-        app_cache_dir.as_deref(),
+        &app_cache_dirs,
         "download_staging",
     );
-    let shared_media = append_child_path(
+    let shared_media = append_child_paths(
         child_paths(app_data_dir.as_deref(), &["shared_media"]),
-        app_cache_dir.as_deref(),
+        &app_cache_dirs,
         "shared_media_exports",
     );
     let platform_list = child_paths(
@@ -282,7 +267,9 @@ pub async fn clear_storage_cache(
 }
 
 fn usage_item(id: &str, path: Option<&Path>, cache_kind: Option<&str>) -> StorageUsageItem {
-    let stats = path.map(|value| stats_for_path(value, &[])).unwrap_or_default();
+    let stats = path
+        .map(|value| stats_for_path(value, &[]))
+        .unwrap_or_default();
     stats_item(
         id,
         stats,
@@ -321,14 +308,23 @@ fn stats_item(
     }
 }
 
-fn other_cache_item(app_cache_dir: Option<&Path>, excluded: &[PathBuf]) -> StorageUsageItem {
-    let stats = app_cache_dir
-        .map(|path| stats_for_path(path, excluded))
-        .unwrap_or_default();
+fn other_cache_item(app_cache_dirs: &[PathBuf], excluded: &[PathBuf]) -> StorageUsageItem {
+    let stats = app_cache_dirs
+        .iter()
+        .fold(FileStats::default(), |mut total, path| {
+            total += stats_for_path(path, excluded);
+            total
+        });
     stats_item(
         "other_cache",
         stats,
-        app_cache_dir.map(|path| path.to_string_lossy().to_string()),
+        (!app_cache_dirs.is_empty()).then(|| {
+            app_cache_dirs
+                .iter()
+                .map(|path| path.to_string_lossy())
+                .collect::<Vec<_>>()
+                .join("\n")
+        }),
         None,
     )
 }
@@ -351,10 +347,15 @@ fn child_paths(root: Option<&Path>, names: &[&str]) -> Vec<PathBuf> {
         .collect()
 }
 
-fn append_child_path(mut paths: Vec<PathBuf>, root: Option<&Path>, name: &str) -> Vec<PathBuf> {
-    if let Some(path) = root {
-        paths.push(path.join(name));
-    }
+fn child_paths_many(roots: &[PathBuf], names: &[&str]) -> Vec<PathBuf> {
+    roots
+        .iter()
+        .flat_map(|root| names.iter().map(move |name| root.join(name)))
+        .collect()
+}
+
+fn append_child_paths(mut paths: Vec<PathBuf>, roots: &[PathBuf], name: &str) -> Vec<PathBuf> {
+    paths.extend(roots.iter().map(|root| root.join(name)));
     paths
 }
 
@@ -387,7 +388,8 @@ fn is_excluded(path: &Path, excluded: &[PathBuf]) -> bool {
     let path_key = canonical_key(path);
     excluded.iter().any(|root| {
         let root_key = canonical_key(root);
-        path_key == root_key || path_key.starts_with(&format!("{}{}", root_key, std::path::MAIN_SEPARATOR))
+        path_key == root_key
+            || path_key.starts_with(&format!("{}{}", root_key, std::path::MAIN_SEPARATOR))
     })
 }
 
@@ -420,7 +422,10 @@ fn download_roots(default_root: Option<&Path>, custom_root: Option<&str>) -> Vec
     }
     if let Some(custom) = custom_root.map(str::trim).filter(|value| !value.is_empty()) {
         let path = PathBuf::from(custom);
-        if !roots.iter().any(|root| canonical_key(root) == canonical_key(&path)) {
+        if !roots
+            .iter()
+            .any(|root| canonical_key(root) == canonical_key(&path))
+        {
             roots.push(path);
         }
     }
@@ -458,7 +463,10 @@ fn scan_download_path(path: &Path, stats: &mut DownloadStats) {
             size_bytes: fs::metadata(path).map(|meta| meta.len()).unwrap_or(0),
             file_count: 1,
         };
-        let extension = path.extension().and_then(|value| value.to_str()).unwrap_or("");
+        let extension = path
+            .extension()
+            .and_then(|value| value.to_str())
+            .unwrap_or("");
         if matches!(extension.to_ascii_lowercase().as_str(), "lrc" | "tlrc") {
             stats.lyrics += file_stats;
         } else if path.file_name().and_then(|value| value.to_str()) != Some("manifest.json") {

@@ -124,9 +124,7 @@ pub async fn remove_playback_stats(
 
 /// 计算曲目的统计身份键，供前端上报时使用
 #[tauri::command]
-pub async fn playback_stats_identity_key(
-    track: crate::state::TrackInfo,
-) -> AppResult<String> {
+pub async fn playback_stats_identity_key(track: crate::state::TrackInfo) -> AppResult<String> {
     Ok(manager::playback_stats_identity_key_pub(&track))
 }
 

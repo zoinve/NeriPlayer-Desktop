@@ -59,7 +59,7 @@ const {
   bypassProxy, internationalizationEnabled,
   backgroundImageUri, backgroundImageBlur, backgroundImageAlpha,
   devModeEnabled, logToFile, logLevel,
-  maxCacheSize, downloadNameTemplate, downloadDir,
+  maxCacheSize, cacheDir, downloadNameTemplate, downloadDir,
   ltServerUrl, ltNickname, ltAllowMemberControl, ltAutoPauseOnMemberChange, ltShareAudioLinks,
   locale: settingLocale,
 } = storeToRefs(settings)
@@ -225,7 +225,6 @@ function handleLocaleSwitch(code: string, event: MouseEvent) {
 
 const defaultScreenOptions = computed(() => [
   { value: 'home', label: t('nav.home') },
-  { value: 'explore', label: t('nav.explore') },
   { value: 'library', label: t('nav.library') },
 ])
 
@@ -431,12 +430,6 @@ const settingsNavGroups = computed(() => [
         icon: 'tune',
       },
       {
-        id: 'motion' as SettingsSectionId,
-        label: t('settings.motion'),
-        description: t('settings.motion_desc'),
-        icon: 'bolt',
-      },
-      {
         id: 'lyrics' as SettingsSectionId,
         label: t('settings.lyrics'),
         description: t('settings.nav_lyrics_desc'),
@@ -457,12 +450,6 @@ const settingsNavGroups = computed(() => [
         label: t('settings.backup'),
         description: t('settings.nav_backup_desc'),
         icon: 'sync',
-      },
-      {
-        id: 'listen_together' as SettingsSectionId,
-        label: t('listen_together.title'),
-        description: t('settings.nav_listen_together_desc'),
-        icon: 'cloud',
       },
       {
         id: 'language' as SettingsSectionId,
@@ -520,6 +507,7 @@ onMounted(() => {
   loadBuildInfo()
   // 加载默认下载目录
   loadDefaultDownloadDir()
+  loadDefaultCacheDir()
   void restoreSettingsScrollPosition(activeSettingsSection.value)
 })
 
@@ -621,6 +609,38 @@ async function loadDefaultDownloadDir() {
 }
 
 const displayDownloadDir = computed(() => downloadDir.value || defaultDownloadDir.value || '...')
+
+const defaultCacheDir = ref('')
+const displayCacheDir = computed(() => cacheDir.value || defaultCacheDir.value || '...')
+
+async function loadDefaultCacheDir() {
+  try {
+    defaultCacheDir.value = await invoke<string>('get_default_cache_dir')
+  } catch (e) {
+    log.error('Failed to get default cache dir:', e)
+  }
+}
+
+async function selectCacheDir() {
+  try {
+    const result = await dialogOpen({ directory: true, multiple: false })
+    if (!result) return
+    const path = typeof result === 'string' ? result : (result as any).path || String(result)
+    const validated = await invoke<string>('set_cache_dir', { path })
+    await settings.setCacheDir(validated)
+    toast.success(t('settings.cache_dir_changed'))
+    if (showStorageManagement.value) await loadStorageUsage()
+  } catch (e) {
+    log.error('Failed to set cache dir:', e)
+    toast.error(t('settings.cache_dir_invalid'))
+  }
+}
+
+async function resetCacheDir() {
+  await settings.resetCacheDir()
+  toast.success(t('settings.cache_dir_reset_done'))
+  if (showStorageManagement.value) await loadStorageUsage()
+}
 
 async function selectDownloadDir() {
   try {
@@ -946,8 +966,6 @@ function formatSyncTime(ms: number): string {
 // 平台账号配置
 const platformAccounts = computed(() => [
   { key: 'netease', label: t('settings.netease_account'), iconSvg: '/icons/ic_netease.svg', auth: auth.netease, login: auth.loginNetease },
-  { key: 'bilibili', label: t('settings.bilibili_account'), iconSvg: '/icons/ic_bilibili.svg', auth: auth.bilibili, login: auth.loginBilibili },
-  { key: 'youtube', label: t('settings.youtube_account'), iconSvg: '/icons/ic_youtube.svg', auth: auth.youtube, login: auth.loginYoutube },
 ])
 
 // 退出登录确认对话框
@@ -1101,8 +1119,8 @@ function confirmDataSaverChange() {
 
         <div v-show="activeSettingsSection === 'personalization'" class="settings-section-panel">
 
-    <!-- YouTube 国际化 -->
-    <div class="setting-card">
+    <!-- 单平台模式不展示 YouTube 国际化入口 -->
+    <div v-if="false" class="setting-card">
       <div class="setting-icon-wrap"><span class="material-symbols-rounded">language</span></div>
       <div class="setting-info">
         <div class="setting-title">{{ t('settings.internationalization') }}</div>
@@ -1728,7 +1746,7 @@ function confirmDataSaverChange() {
         <input type="range" class="m3-slider" v-model.number="cloudMusicOffset" min="-2000" max="2000" step="50" />
       </div>
 
-      <div class="setting-card">
+      <div v-if="false" class="setting-card">
         <div class="setting-icon-wrap"><span class="material-symbols-rounded">music_note</span></div>
         <div class="setting-info">
           <div class="setting-title">{{ t('settings.qq_offset') }}</div>
@@ -1849,7 +1867,7 @@ function confirmDataSaverChange() {
         </div>
       </div>
 
-      <div class="setting-card quality-card">
+      <div v-if="false" class="setting-card quality-card">
         <div class="setting-icon-wrap"><span class="material-symbols-rounded">library_music</span></div>
         <div class="setting-info">
           <div class="setting-title">{{ t('settings.qq_quality') }}</div>
@@ -1859,7 +1877,7 @@ function confirmDataSaverChange() {
         </div>
       </div>
 
-      <div class="setting-card quality-card">
+      <div v-if="false" class="setting-card quality-card">
         <div class="setting-icon-wrap"><span class="material-symbols-rounded">smart_display</span></div>
         <div class="setting-info">
           <div class="setting-title">{{ t('settings.youtube_quality') }}</div>
@@ -1869,7 +1887,7 @@ function confirmDataSaverChange() {
         </div>
       </div>
 
-      <div class="setting-card quality-card">
+      <div v-if="false" class="setting-card quality-card">
         <div class="setting-icon-wrap"><span class="material-symbols-rounded">play_circle</span></div>
         <div class="setting-info">
           <div class="setting-title">{{ t('settings.bili_quality') }}</div>
@@ -1913,6 +1931,18 @@ function confirmDataSaverChange() {
           :max="MAX_MEDIA_CACHE_SIZE_MB"
           step="256"
         />
+      </div>
+
+      <div class="setting-card">
+        <div class="setting-icon-wrap"><span class="material-symbols-rounded">folder_data</span></div>
+        <div class="setting-info">
+          <div class="setting-title">{{ t('settings.cache_dir') }}</div>
+          <div class="setting-desc" style="word-break: break-all">{{ displayCacheDir }}</div>
+        </div>
+        <div class="chip-row">
+          <button class="m3-chip sm" @click="selectCacheDir">{{ t('settings.cache_dir_select') }}</button>
+          <button v-if="cacheDir" class="m3-chip sm" @click="resetCacheDir">{{ t('settings.cache_dir_reset') }}</button>
+        </div>
       </div>
 
       <div class="setting-card" style="cursor: pointer" @click="openDownloadTemplateDialog">

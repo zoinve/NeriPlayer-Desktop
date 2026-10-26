@@ -2,23 +2,17 @@
 import { computed } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
-import { useSettingsStore } from '@/stores/settings'
 
 const router = useRouter()
 const route = useRoute()
 const { t } = useI18n()
-const settings = useSettingsStore()
 
 const navItems = computed(() => {
   const items = [
     { path: '/', section: 'home', icon: 'home', key: 'nav.home' },
-    { path: '/explore', section: 'explore', icon: 'explore', key: 'nav.explore' },
     { path: '/library', section: 'library', icon: 'library_music', key: 'nav.library' },
     { path: '/settings', section: 'settings', icon: 'settings', key: 'nav.settings' },
   ]
-  if (settings.devModeEnabled) {
-    items.push({ path: '/debug', section: 'debug', icon: 'bug_report', key: 'settings.debug' })
-  }
   return items
 })
 

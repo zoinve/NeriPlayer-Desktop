@@ -1,9 +1,10 @@
 use crate::api::bilibili::client::{BiliAudioStream, BiliClient};
 use crate::api::netease::client::NeteasePlaybackUnavailableReason;
 use crate::error::{AppError, AppResult};
-use crate::state::AppState;
 use crate::settings::store::{self, AppSettings, SettingsLoadResult};
+use crate::state::AppState;
 use serde::Serialize;
+use std::path::{Path, PathBuf};
 use tauri::{AppHandle, Manager, State};
 
 /// 平台连通性探针
@@ -72,6 +73,50 @@ pub async fn get_log_dir() -> AppResult<String> {
     Ok(crate::logging::log_dir().to_string_lossy().to_string())
 }
 
+#[tauri::command]
+pub async fn get_default_cache_dir(app: AppHandle) -> AppResult<String> {
+    Ok(store::default_cache_dir(&app)?
+        .to_string_lossy()
+        .to_string())
+}
+
+#[tauri::command]
+pub async fn set_cache_dir(path: String) -> AppResult<String> {
+    let selected = PathBuf::from(path.trim());
+    if !selected.is_absolute() {
+        return Err(AppError::Other("Cache directory must be absolute".into()));
+    }
+    let cache_dir = custom_cache_dir(selected);
+    validate_writable_directory(&cache_dir)?;
+    Ok(std::fs::canonicalize(&cache_dir)
+        .unwrap_or(cache_dir)
+        .to_string_lossy()
+        .to_string())
+}
+
+fn custom_cache_dir(selected: PathBuf) -> PathBuf {
+    if selected
+        .file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name.eq_ignore_ascii_case("NeriPlayerCache"))
+    {
+        selected
+    } else {
+        selected.join("NeriPlayerCache")
+    }
+}
+
+fn validate_writable_directory(path: &Path) -> AppResult<()> {
+    std::fs::create_dir_all(path)?;
+    if !std::fs::metadata(path)?.is_dir() {
+        return Err(AppError::Other("Cache path is not a directory".into()));
+    }
+    let probe = path.join(format!(".neriplayer-write-test-{}", uuid::Uuid::new_v4()));
+    std::fs::write(&probe, b"cache path probe")?;
+    std::fs::remove_file(probe)?;
+    Ok(())
+}
+
 /// 获取网易云歌曲播放 URL
 #[derive(Serialize)]
 pub struct SongUrlResult {
@@ -92,7 +137,11 @@ pub async fn get_netease_song_url(
 ) -> AppResult<SongUrlResult> {
     // 快速切歌时，过期请求直接中止，释放连接池
     if let Some(gen) = request_generation {
-        if state.playback_generation.load(std::sync::atomic::Ordering::Acquire) > gen {
+        if state
+            .playback_generation
+            .load(std::sync::atomic::Ordering::Acquire)
+            > gen
+        {
             return Err(AppError::Audio("Playback request superseded".into()));
         }
     }
@@ -116,7 +165,11 @@ pub async fn get_qq_song_url(
     state: State<'_, AppState>,
 ) -> AppResult<SongUrlResult> {
     if let Some(gen) = request_generation {
-        if state.playback_generation.load(std::sync::atomic::Ordering::Acquire) > gen {
+        if state
+            .playback_generation
+            .load(std::sync::atomic::Ordering::Acquire)
+            > gen
+        {
             return Err(AppError::Audio("Playback request superseded".into()));
         }
     }
@@ -166,7 +219,11 @@ pub async fn get_bili_audio_url(
     state: State<'_, AppState>,
 ) -> AppResult<BiliAudioResult> {
     if let Some(gen) = request_generation {
-        if state.playback_generation.load(std::sync::atomic::Ordering::Acquire) > gen {
+        if state
+            .playback_generation
+            .load(std::sync::atomic::Ordering::Acquire)
+            > gen
+        {
             return Err(AppError::Audio("Playback request superseded".into()));
         }
     }
@@ -238,7 +295,11 @@ fn select_bili_audio_stream(
     let is_lossless = |stream: &BiliAudioStream| {
         stream.quality_id == 30251 || stream.codecs.eq_ignore_ascii_case("flac")
     };
-    let normal_streams = || streams.iter().filter(|stream| !is_dolby(stream) && !is_lossless(stream));
+    let normal_streams = || {
+        streams
+            .iter()
+            .filter(|stream| !is_dolby(stream) && !is_lossless(stream))
+    };
 
     match quality.unwrap_or("high") {
         "dolby" => streams.iter().find(|stream| is_dolby(stream)).cloned(),
@@ -285,7 +346,11 @@ pub async fn get_youtube_audio_url(
 ) -> AppResult<Vec<YtAudioResult>> {
     // 快速切歌时丢弃过期解析, 与网易云/QQ/B站一致
     if let Some(gen) = request_generation {
-        if state.playback_generation.load(std::sync::atomic::Ordering::Acquire) > gen {
+        if state
+            .playback_generation
+            .load(std::sync::atomic::Ordering::Acquire)
+            > gen
+        {
             return Err(AppError::Audio("Playback request superseded".into()));
         }
     }
@@ -302,7 +367,11 @@ pub async fn get_youtube_audio_url(
     )
     .await?;
     if let Some(gen) = request_generation {
-        if state.playback_generation.load(std::sync::atomic::Ordering::Acquire) > gen {
+        if state
+            .playback_generation
+            .load(std::sync::atomic::Ordering::Acquire)
+            > gen
+        {
             return Err(AppError::Audio("Playback request superseded".into()));
         }
     }
@@ -355,12 +424,23 @@ pub async fn get_build_info() -> AppResult<BuildInfo> {
 #[cfg(test)]
 mod tests {
     use super::{
-        build_bili_audio_candidates,
-        select_bili_audio_stream,
-        split_legacy_bili_song_id,
-        LegacyBiliSongId,
+        build_bili_audio_candidates, custom_cache_dir, select_bili_audio_stream,
+        split_legacy_bili_song_id, LegacyBiliSongId,
     };
     use crate::api::bilibili::client::BiliAudioStream;
+    use std::path::PathBuf;
+
+    #[test]
+    fn custom_cache_location_is_isolated_in_an_app_directory() {
+        assert_eq!(
+            custom_cache_dir(PathBuf::from("Cache")),
+            PathBuf::from("Cache").join("NeriPlayerCache")
+        );
+        assert_eq!(
+            custom_cache_dir(PathBuf::from("Cache").join("NeriPlayerCache")),
+            PathBuf::from("Cache").join("NeriPlayerCache")
+        );
+    }
 
     fn stream(url: &str, bandwidth: u64, codecs: &str, quality_id: u32) -> BiliAudioStream {
         BiliAudioStream {
@@ -389,7 +469,10 @@ mod tests {
         let streams = vec![stream("https://audio/high", 320_000, "flac", 30251)];
 
         let selected = select_bili_audio_stream(streams, Some("dolby"));
-        assert_eq!(selected.map(|stream| stream.url), Some("https://audio/high".into()));
+        assert_eq!(
+            selected.map(|stream| stream.url),
+            Some("https://audio/high".into())
+        );
     }
 
     #[test]

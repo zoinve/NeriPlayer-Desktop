@@ -1304,13 +1304,15 @@ onUnmounted(() => {
           @click="openFavorite(fpl)"
           @keydown.enter="openFavorite(fpl)"
         >
-          <div class="pl-icon has-cover" v-if="fpl.coverUrl && !isLibraryCoverFailed('favorite', fpl.id, fpl.coverUrl)">
-            <img
+          <div class="pl-icon has-cover" v-if="fpl.coverUrl">
+            <BilibiliCoverImage
               :src="toDisplayableLibraryCoverUrl(fpl.coverUrl)"
-              referrerpolicy="no-referrer"
               class="pl-cover-img"
-              @error="markLibraryCoverFailed('favorite', fpl.id, fpl.coverUrl)"
-            />
+            >
+              <span class="material-symbols-rounded filled" style="font-size: 22px">
+                {{ favoriteCategory === 'artists' ? 'account_circle' : 'bookmark' }}
+              </span>
+            </BilibiliCoverImage>
           </div>
           <div class="pl-icon" v-else>
             <span class="material-symbols-rounded filled" style="font-size: 22px">

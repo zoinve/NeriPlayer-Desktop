@@ -14,6 +14,17 @@ export interface PlaylistInfo {
   trackCount: number
   description?: string
   creator?: string
+  creatorUserId?: number
+  subscribed?: boolean
+  specialType?: number
+}
+
+export interface FollowedArtistInfo {
+  id: number
+  name: string
+  coverUrl: string
+  albumCount: number
+  trackCount: number
 }
 
 export interface HomeFeedShelf {
@@ -59,6 +70,7 @@ const emptyHomeSongSection = (): HomeSongSection => ({
 })
 
 export const useRecommendStore = defineStore('recommend', () => {
+  let neteaseGeneration = 0
   // 网易云推荐歌单
   const recommendedPlaylists = ref<PlaylistInfo[]>([])
   const recommendedSongs = ref<any[]>([])
@@ -76,6 +88,7 @@ export const useRecommendStore = defineStore('recommend', () => {
 
   // 用户喜欢的歌曲 ID 集合
   const likedSongIds = ref<Set<number>>(new Set())
+  const followedArtists = ref<FollowedArtistInfo[]>([])
 
   const isLoading = ref(false)
   const error = ref<string | null>(null)
@@ -90,9 +103,7 @@ export const useRecommendStore = defineStore('recommend', () => {
       if (!raw) return
       const cache = JSON.parse(raw)
       if (cache.recommendedPlaylists?.length) recommendedPlaylists.value = cache.recommendedPlaylists
-      if (cache.userPlaylists && Object.keys(cache.userPlaylists).length) userPlaylists.value = cache.userPlaylists
-      // 专辑与歌单同样入缓存，重启后无需等网络即可显示
-      if (cache.userAlbums?.length) userAlbums.value = cache.userAlbums
+      // 账号媒体库不从无账号分区的旧缓存恢复，避免切换账号后短暂展示他人数据。
       if (cache.homeFeedShelves?.length) homeFeedShelves.value = cache.homeFeedShelves
       if (cache.homeHotSongs?.items?.length) homeHotSongs.value = { ...emptyHomeSongSection(), ...cache.homeHotSongs }
       if (cache.homeRadarSongs?.items?.length) homeRadarSongs.value = { ...emptyHomeSongSection(), ...cache.homeRadarSongs }
@@ -122,8 +133,10 @@ export const useRecommendStore = defineStore('recommend', () => {
     delete next[platform]
     userPlaylists.value = next
     if (platform === 'netease') {
+      neteaseGeneration += 1
       userAlbums.value = []
       likedSongIds.value = new Set()
+      followedArtists.value = []
     }
     // 内存清了也要落盘，否则重启后 loadCache 又把旧数据恢复回来
     saveCache()
@@ -222,6 +235,7 @@ export const useRecommendStore = defineStore('recommend', () => {
 
   /** 获取用户歌单 */
   async function fetchUserPlaylists(platform: string) {
+    const generation = neteaseGeneration
     isLoading.value = true
     try {
       const data = await invoke<any>('get_user_playlists', { platform })
@@ -235,6 +249,9 @@ export const useRecommendStore = defineStore('recommend', () => {
           coverUrl: p.coverImgUrl || '',
           trackCount: p.trackCount || 0,
           creator: p.creator?.nickname || '',
+          creatorUserId: Number(p.creator?.userId) || 0,
+          subscribed: Boolean(p.subscribed),
+          specialType: Number(p.specialType) || 0,
         }))
       } else if (platform === 'bilibili') {
         const list = data?.data?.list || []
@@ -267,6 +284,7 @@ export const useRecommendStore = defineStore('recommend', () => {
         playlists = parseYouTubeLibraryPlaylistsShared(data)
       }
 
+      if (platform === 'netease' && generation !== neteaseGeneration) return
       userPlaylists.value[platform] = playlists
       saveCache()
     } catch (e) {
@@ -328,14 +346,85 @@ export const useRecommendStore = defineStore('recommend', () => {
   }
 
   /** 获取用户喜欢的歌曲 ID 列表 */
-  async function fetchLikedSongIds() {
+  async function fetchLikedSongIds(): Promise<boolean> {
+    const generation = neteaseGeneration
     try {
       const data = await invoke<any>('get_liked_song_ids')
       const ids: number[] = data?.ids || []
-      likedSongIds.value = new Set(ids)
+      if (generation === neteaseGeneration) likedSongIds.value = new Set(ids)
+      return true
     } catch (e) {
       log.error('fetchLikedSongIds:', e)
+      return false
     }
+  }
+
+  async function fetchFollowedArtists() {
+    const generation = neteaseGeneration
+    try {
+      const data = await invoke<any>('netease_get_followed_artists', { offset: 0, limit: 1000 })
+      const list = data?.data || data?.artists || []
+      const mapped = list.map((artist: any) => ({
+        id: Number(artist.id) || 0,
+        name: String(artist.name || ''),
+        coverUrl: artist.picUrl || artist.img1v1Url || '',
+        albumCount: Number(artist.albumSize) || 0,
+        trackCount: Number(artist.musicSize) || 0,
+      })).filter((artist: FollowedArtistInfo) => artist.id > 0)
+      if (generation === neteaseGeneration) followedArtists.value = mapped
+      return true
+    } catch (e) {
+      log.error('fetchFollowedArtists:', e)
+      return false
+    }
+  }
+
+  async function setPlaylistSubscribed(playlistId: number, subscribed: boolean) {
+    const command = subscribed ? 'netease_subscribe_playlist' : 'netease_unsubscribe_playlist'
+    await invoke(command, { playlistId })
+    if (!subscribed) {
+      userPlaylists.value.netease = (userPlaylists.value.netease || [])
+        .filter(item => Number(item.id) !== playlistId)
+      saveCache()
+    }
+    void fetchUserPlaylists('netease')
+  }
+
+  async function setArtistFollowed(artistId: number, followed: boolean) {
+    const command = followed ? 'netease_follow_artist' : 'netease_unfollow_artist'
+    await invoke(command, { artistId })
+    if (followed) {
+      if (!followedArtists.value.some(artist => artist.id === artistId)) {
+        followedArtists.value = [...followedArtists.value, {
+          id: artistId, name: '', coverUrl: '', albumCount: 0, trackCount: 0,
+        }]
+      }
+    } else {
+      followedArtists.value = followedArtists.value.filter(artist => artist.id !== artistId)
+    }
+    void fetchFollowedArtists()
+  }
+
+  async function createCloudPlaylist(name: string) {
+    const result = await invoke<any>('netease_create_playlist', { name })
+    void fetchUserPlaylists('netease')
+    return result
+  }
+
+  async function renameCloudPlaylist(playlistId: number, name: string) {
+    await invoke('netease_rename_playlist', { playlistId, name })
+    userPlaylists.value.netease = (userPlaylists.value.netease || []).map(item =>
+      Number(item.id) === playlistId ? { ...item, name } : item)
+    saveCache()
+    void fetchUserPlaylists('netease')
+  }
+
+  async function deleteCloudPlaylist(playlistId: number) {
+    await invoke('netease_delete_playlist', { playlistId })
+    userPlaylists.value.netease = (userPlaylists.value.netease || [])
+      .filter(item => Number(item.id) !== playlistId)
+    saveCache()
+    void fetchUserPlaylists('netease')
   }
 
   /** 喜欢/取消喜欢歌曲 */
@@ -369,16 +458,19 @@ export const useRecommendStore = defineStore('recommend', () => {
 
   /** 获取用户收藏的专辑列表（网易云） */
   async function fetchUserAlbums() {
+    const generation = neteaseGeneration
     try {
       const data = await invoke<any>('get_user_stared_albums', {})
       const list = data?.data || []
-      userAlbums.value = list.map((a: any) => ({
+      const mapped = list.map((a: any) => ({
         id: a.id,
         name: a.name,
         coverUrl: a.picUrl || '',
         artist: a.artists?.map((ar: any) => ar.name).join(', ') || '',
         trackCount: a.size || 0,
       }))
+      if (generation !== neteaseGeneration) return
+      userAlbums.value = mapped
       saveCache()
     } catch (e) {
       log.error('fetchUserAlbums:', e)
@@ -407,11 +499,13 @@ export const useRecommendStore = defineStore('recommend', () => {
   return {
     recommendedPlaylists, recommendedSongs, homeHotSongs, homeRadarSongs,
     homeFeedShelves, userPlaylists,
-    userAlbums, likedSongIds, isLoading, error, isCacheFresh,
+    userAlbums, likedSongIds, followedArtists, isLoading, error, isCacheFresh,
     fetchRecommendedPlaylists, fetchRecommendedSongs, fetchUserPlaylists,
     fetchHomeSearchRecommendations, clearHomeSearchRecommendations,
     fetchHomeFeed, fetchHighQualityPlaylists, fetchHighQualityTags,
     fetchLikedSongIds, toggleLikeSong, fetchAlbumDetail, fetchUserAlbums,
+    fetchFollowedArtists, setPlaylistSubscribed, setArtistFollowed,
+    createCloudPlaylist, renameCloudPlaylist, deleteCloudPlaylist,
     invalidatePlatform,
     fetchBiliFavoriteItems, validateAuth,
   }

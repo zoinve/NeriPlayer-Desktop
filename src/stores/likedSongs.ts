@@ -1,8 +1,7 @@
 import { defineStore } from 'pinia'
-import { ref } from 'vue'
-import { invoke } from '@tauri-apps/api/core'
-import { listen, type UnlistenFn } from '@tauri-apps/api/event'
+import { computed, ref } from 'vue'
 import type { TrackInfo } from '@/stores/player'
+import { AUTH_CHANGED_EVENT, useAuthStore } from '@/stores/auth'
 import { useRecommendStore } from '@/stores/recommend'
 import { useToastStore } from '@/stores/toast'
 import i18n from '@/i18n'
@@ -10,178 +9,86 @@ import { createLogger } from '@/utils/logger'
 
 const log = createLogger('liked-songs')
 
-interface PlaylistInfo {
-  id: number
-  name: string
-}
-
-const DEFAULT_LIKED_PLAYLIST_NAME = '我喜欢的音乐'
-const LIKED_PLAYLIST_NAMES = [
-  DEFAULT_LIKED_PLAYLIST_NAME,
-  '我喜歡的音樂',
-  'お気に入りの曲',
-  'Liked Songs',
-  'My Favorite Music',
-]
-
 export const useLikedSongsStore = defineStore('likedSongs', () => {
-  const likedPlaylistId = ref<number | null>(null)
-  const likedTrackIds = ref<Set<string>>(new Set())
   const isLoading = ref(false)
   const isReady = ref(false)
+  const likedPlaylistId = ref<number | null>(null)
+  const recommend = useRecommendStore()
+  const auth = useAuthStore()
+  const likedTrackIds = computed(() => new Set(
+    [...recommend.likedSongIds].map(id => `netease:${id}`),
+  ))
 
   let loadPromise: Promise<void> | null = null
-  let unlistenPlaylistsChanged: UnlistenFn | null = null
+  let started = false
 
-  function inferTrackSource(trackId: string) {
-    if (trackId.startsWith('netease:')) return 'netease'
-    if (trackId.startsWith('qq:')) return 'qq'
-    if (trackId.startsWith('bilibili:')) return 'bilibili'
-    if (trackId.startsWith('youtube:')) return 'youtube'
-    return 'local'
-  }
-
-  function toBackendTrack(track: TrackInfo) {
-    return {
-      id: track.id,
-      title: track.title,
-      artist: track.artist,
-      album: track.album || '',
-      duration_ms: track.durationMs || 0,
-      cover_url: track.coverUrl || null,
-      url: track.audioUrl || '',
-      source: inferTrackSource(track.id),
-      added_at: Math.max(0, Math.round(track.addedAt || 0)),
-      sync_payload: track.syncPayload ?? null,
-      playlist_key: track.playlistKey ?? null,
-    }
-  }
-
-  function getNeteaseSongId(track: TrackInfo) {
-    if (!track.id.startsWith('netease:')) return null
-    const id = Number.parseInt(track.id.replace('netease:', ''), 10)
-    return Number.isFinite(id) ? id : null
-  }
-
-  function setTrackLiked(trackId: string, liked: boolean) {
-    const next = new Set(likedTrackIds.value)
-    if (liked) {
-      next.add(trackId)
-    } else {
-      next.delete(trackId)
-    }
-    likedTrackIds.value = next
+  function getNeteaseSongId(track?: TrackInfo | null) {
+    if (!track?.id.startsWith('netease:')) return null
+    const id = Number.parseInt(track.id.slice('netease:'.length), 10)
+    return Number.isSafeInteger(id) && id > 0 ? id : null
   }
 
   async function loadLikedPlaylist() {
     if (loadPromise) return loadPromise
-
     loadPromise = (async () => {
       isLoading.value = true
       try {
-        const playlists = await invoke<PlaylistInfo[]>('list_playlists')
-        const liked = playlists.find(p => LIKED_PLAYLIST_NAMES.includes(p.name))
-        if (!liked) {
-          likedPlaylistId.value = null
-          likedTrackIds.value = new Set()
+        if (!auth.netease.loggedIn) {
+          recommend.likedSongIds.clear()
           return
         }
-
-        likedPlaylistId.value = liked.id
-        const tracks = await invoke<Array<{ id?: string }>>('get_playlist_tracks', { id: liked.id })
-        likedTrackIds.value = new Set(tracks.map(t => t.id || '').filter(Boolean))
-      } catch (e) {
-        log.error('loadLikedPlaylist:', e)
+        await recommend.fetchLikedSongIds()
       } finally {
         isReady.value = true
         isLoading.value = false
         loadPromise = null
       }
     })()
-
     return loadPromise
   }
 
-  async function ensureLikedPlaylist() {
-    await loadLikedPlaylist()
-    if (likedPlaylistId.value !== null) return likedPlaylistId.value
-
-    const created = await invoke<PlaylistInfo>('create_playlist', { name: DEFAULT_LIKED_PLAYLIST_NAME })
-    likedPlaylistId.value = created.id
-    likedTrackIds.value = new Set()
-    return created.id
-  }
-
   function isTrackLiked(track?: TrackInfo | null) {
-    if (!track?.id) return false
-    return likedTrackIds.value.has(track.id)
+    const id = getNeteaseSongId(track)
+    return id !== null && recommend.likedSongIds.has(id)
   }
 
   async function toggleTrack(track?: TrackInfo | null) {
-    if (!track?.id) return false
+    const songId = getNeteaseSongId(track)
+    if (songId === null || !auth.netease.loggedIn) return false
 
-    await loadLikedPlaylist()
-    const shouldLike = !isTrackLiked(track)
-    const neteaseSongId = getNeteaseSongId(track)
-
+    const shouldLike = !recommend.likedSongIds.has(songId)
+    isLoading.value = true
     try {
-      if (shouldLike) {
-        const playlistId = await ensureLikedPlaylist()
-        await invoke('add_to_playlist', { playlistId, track: toBackendTrack(track) })
-        setTrackLiked(track.id, true)
-      } else if (likedPlaylistId.value !== null) {
-        await invoke('remove_from_playlist', {
-          playlistId: likedPlaylistId.value,
-          trackId: track.id,
-        })
-        setTrackLiked(track.id, false)
-      }
-      if (neteaseSongId !== null) {
-        // 网易云端红心上报失败（会话失效/业务码非 200）不能静默：本地已收藏但云端未同步，
-        // 两端红心会无提示地漂移，明确提示用户（CL-2）
-        useRecommendStore()
-          .toggleLikeSong(neteaseSongId, shouldLike)
-          .then((ok) => {
-            if (!ok) {
-              useToastStore().show(
-                (i18n.global as any).t('player.like_cloud_sync_failed'),
-                'info',
-              )
-            }
-          })
-          .catch(() => {
-            useToastStore().show(
-              (i18n.global as any).t('player.like_cloud_sync_failed'),
-              'info',
-            )
-          })
-      }
+      const ok = await recommend.toggleLikeSong(songId, shouldLike)
+      if (!ok) throw new Error('Netease rejected like operation')
       return true
     } catch (e) {
-      log.error('toggleLikedTrack:', e)
-      await loadLikedPlaylist()
+      log.error('toggleTrack:', e)
+      useToastStore().error((i18n.global as any).t('player.like_cloud_sync_failed'))
+      await recommend.fetchLikedSongIds()
       return false
+    } finally {
+      isLoading.value = false
     }
   }
 
+  function handleAuthChanged(event: Event) {
+    const platform = (event as CustomEvent<{ platform?: string }>).detail?.platform
+    if (platform === 'netease') void loadLikedPlaylist()
+  }
+
   async function start() {
-    if (!unlistenPlaylistsChanged) {
-      try {
-        unlistenPlaylistsChanged = await listen('playlists-changed', () => {
-          loadLikedPlaylist()
-        })
-      } catch (e) {
-        log.error('listen playlists-changed for liked songs:', e)
-      }
+    if (!started) {
+      window.addEventListener(AUTH_CHANGED_EVENT, handleAuthChanged)
+      started = true
     }
     await loadLikedPlaylist()
   }
 
   function stop() {
-    if (unlistenPlaylistsChanged) {
-      unlistenPlaylistsChanged()
-      unlistenPlaylistsChanged = null
-    }
+    if (!started) return
+    window.removeEventListener(AUTH_CHANGED_EVENT, handleAuthChanged)
+    started = false
   }
 
   return {

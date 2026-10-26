@@ -1,12 +1,12 @@
+use crate::error::{AppError, AppResult};
+use crate::library::{playlist::PlaylistStore, scanner};
+use crate::state::TrackInfo;
+use crate::sync::manager;
+use crate::sync::models::SyncCausalToken;
+use crate::sync::models::SyncFavoritePlaylist;
 use serde::Serialize;
 use std::time::Instant;
 use tauri::{AppHandle, Emitter};
-use crate::error::{AppError, AppResult};
-use crate::state::TrackInfo;
-use crate::library::{scanner, playlist::PlaylistStore};
-use crate::sync::models::SyncFavoritePlaylist;
-use crate::sync::models::SyncCausalToken;
-use crate::sync::manager;
 
 #[tauri::command]
 pub async fn scan_music_directory(
@@ -89,27 +89,31 @@ fn list_playlists_blocking(path: std::path::PathBuf) -> AppResult<Vec<PlaylistIn
         }
     }
 
-    let list: Vec<PlaylistInfo> = store.playlists.iter().map(|p| {
-        let cover = p.tracks.iter().find_map(|t| {
-            t.cover_url
-                .as_ref()
-                .filter(|url| !url.trim().is_empty())
-                .cloned()
-        });
-        let mut seen = std::collections::HashSet::new();
-        let unique_count = p.tracks.iter()
-            .filter(|track| {
-                !track.id.is_empty() && seen.insert(playlist_track_key(track))
-            })
-            .count();
-        PlaylistInfo {
-            id: p.id,
-            name: p.name.clone(),
-            track_count: unique_count,
-            modified_at: p.modified_at,
-            cover_url: cover,
-        }
-    }).collect();
+    let list: Vec<PlaylistInfo> = store
+        .playlists
+        .iter()
+        .map(|p| {
+            let cover = p.tracks.iter().find_map(|t| {
+                t.cover_url
+                    .as_ref()
+                    .filter(|url| !url.trim().is_empty())
+                    .cloned()
+            });
+            let mut seen = std::collections::HashSet::new();
+            let unique_count = p
+                .tracks
+                .iter()
+                .filter(|track| !track.id.is_empty() && seen.insert(playlist_track_key(track)))
+                .count();
+            PlaylistInfo {
+                id: p.id,
+                name: p.name.clone(),
+                track_count: unique_count,
+                modified_at: p.modified_at,
+                cover_url: cover,
+            }
+        })
+        .collect();
     Ok(list)
 }
 
@@ -172,10 +176,15 @@ pub async fn get_playlist_tracks(id: i64) -> AppResult<Vec<TrackInfo>> {
         );
         let path = playlists_path();
         let store = PlaylistStore::load_strict(&path)?;
-        let pl = store.playlists.iter().find(|p| p.id == id)
+        let pl = store
+            .playlists
+            .iter()
+            .find(|p| p.id == id)
             .ok_or_else(|| AppError::NotFound("Playlist not found".into()))?;
         let mut seen = std::collections::HashSet::new();
-        let tracks: Vec<TrackInfo> = pl.tracks.iter()
+        let tracks: Vec<TrackInfo> = pl
+            .tracks
+            .iter()
             .filter(|track| !track.id.is_empty() && seen.insert(playlist_track_key(track)))
             .cloned()
             .map(|mut track| {
@@ -209,7 +218,10 @@ pub async fn add_to_playlist(app: AppHandle, playlist_id: i64, track: TrackInfo)
     let path = playlists_path();
     let mut store = PlaylistStore::load_strict(&path)?;
     let added_at = {
-        let pl = store.playlists.iter().find(|p| p.id == playlist_id)
+        let pl = store
+            .playlists
+            .iter()
+            .find(|p| p.id == playlist_id)
             .ok_or_else(|| AppError::NotFound("Playlist not found".into()))?;
         if pl
             .tracks
@@ -228,7 +240,10 @@ pub async fn add_to_playlist(app: AppHandle, playlist_id: i64, track: TrackInfo)
     let sync_song = manager::tracks_to_sync_songs_pub(std::slice::from_ref(&stamped))
         .into_iter()
         .next();
-    let pl = store.playlists.iter_mut().find(|p| p.id == playlist_id)
+    let pl = store
+        .playlists
+        .iter_mut()
+        .find(|p| p.id == playlist_id)
         .ok_or_else(|| AppError::NotFound("Playlist not found".into()))?;
     pl.tracks.insert(0, stamped);
     pl.modified_at = added_at as u64;
@@ -240,22 +255,31 @@ pub async fn add_to_playlist(app: AppHandle, playlist_id: i64, track: TrackInfo)
     Ok(())
 }
 
-
 #[tauri::command]
-pub async fn add_tracks_to_playlist(app: AppHandle, playlist_id: i64, tracks: Vec<TrackInfo>) -> AppResult<usize> {
+pub async fn add_tracks_to_playlist(
+    app: AppHandle,
+    playlist_id: i64,
+    tracks: Vec<TrackInfo>,
+) -> AppResult<usize> {
     let path = playlists_path();
     let mut store = PlaylistStore::load_strict(&path)?;
 
     let mut seen = std::collections::HashSet::new();
     let new_tracks: Vec<TrackInfo> = {
-        let pl = store.playlists.iter().find(|p| p.id == playlist_id)
+        let pl = store
+            .playlists
+            .iter()
+            .find(|p| p.id == playlist_id)
             .ok_or_else(|| AppError::NotFound("Playlist not found".into()))?;
         tracks
             .into_iter()
             .filter(|track| {
                 let key = playlist_track_key(track);
                 !track.id.is_empty()
-                    && !pl.tracks.iter().any(|current| playlist_track_key(current) == key)
+                    && !pl
+                        .tracks
+                        .iter()
+                        .any(|current| playlist_track_key(current) == key)
                     && seen.insert(key)
             })
             .collect()
@@ -264,7 +288,10 @@ pub async fn add_tracks_to_playlist(app: AppHandle, playlist_id: i64, tracks: Ve
     let added = new_tracks.len();
     if added > 0 {
         let newest_added_at = {
-            let pl = store.playlists.iter().find(|p| p.id == playlist_id)
+            let pl = store
+                .playlists
+                .iter()
+                .find(|p| p.id == playlist_id)
                 .ok_or_else(|| AppError::NotFound("Playlist not found".into()))?;
             next_track_added_at(&pl.tracks, added)
         };
@@ -286,7 +313,10 @@ pub async fn add_tracks_to_playlist(app: AppHandle, playlist_id: i64, tracks: Ve
                 store.clear_playlist_song_deletion(&playlist_id.to_string(), &sync_song);
             }
         }
-        let pl = store.playlists.iter_mut().find(|p| p.id == playlist_id)
+        let pl = store
+            .playlists
+            .iter_mut()
+            .find(|p| p.id == playlist_id)
             .ok_or_else(|| AppError::NotFound("Playlist not found".into()))?;
         for track in stamped_tracks.into_iter().rev() {
             pl.tracks.insert(0, track);
@@ -381,11 +411,18 @@ pub async fn update_playlist_track(
 }
 
 #[tauri::command]
-pub async fn remove_from_playlist(app: AppHandle, playlist_id: i64, track_id: String) -> AppResult<()> {
+pub async fn remove_from_playlist(
+    app: AppHandle,
+    playlist_id: i64,
+    track_id: String,
+) -> AppResult<()> {
     let path = playlists_path();
     let mut store = PlaylistStore::load_strict(&path)?;
     let removed_track = {
-        let pl = store.playlists.iter_mut().find(|p| p.id == playlist_id)
+        let pl = store
+            .playlists
+            .iter_mut()
+            .find(|p| p.id == playlist_id)
             .ok_or_else(|| AppError::NotFound("Playlist not found".into()))?;
         let uses_playlist_key = pl
             .tracks
@@ -418,12 +455,19 @@ pub async fn remove_from_playlist(app: AppHandle, playlist_id: i64, track_id: St
     Ok(())
 }
 
-
 #[tauri::command]
-pub async fn remove_tracks_from_playlist(app: AppHandle, playlist_id: i64, track_ids: Vec<String>) -> AppResult<usize> {
+pub async fn remove_tracks_from_playlist(
+    app: AppHandle,
+    playlist_id: i64,
+    track_ids: Vec<String>,
+) -> AppResult<usize> {
     let path = playlists_path();
     let mut store = PlaylistStore::load_strict(&path)?;
-    if !store.playlists.iter().any(|playlist| playlist.id == playlist_id) {
+    if !store
+        .playlists
+        .iter()
+        .any(|playlist| playlist.id == playlist_id)
+    {
         return Err(AppError::NotFound("Playlist not found".into()));
     }
 
@@ -433,11 +477,13 @@ pub async fn remove_tracks_from_playlist(app: AppHandle, playlist_id: i64, track
     }
 
     let (removed_tracks, removed) = {
-        let pl = store.playlists.iter_mut().find(|p| p.id == playlist_id)
+        let pl = store
+            .playlists
+            .iter_mut()
+            .find(|p| p.id == playlist_id)
             .ok_or_else(|| AppError::NotFound("Playlist not found".into()))?;
-        let matches = |track: &TrackInfo| {
-            ids.contains(&playlist_track_key(track)) || ids.contains(&track.id)
-        };
+        let matches =
+            |track: &TrackInfo| ids.contains(&playlist_track_key(track)) || ids.contains(&track.id);
         let removed_tracks: Vec<TrackInfo> = pl
             .tracks
             .iter()
@@ -456,11 +502,8 @@ pub async fn remove_tracks_from_playlist(app: AppHandle, playlist_id: i64, track
     if removed > 0 {
         let device_id = manager::get_or_create_device_id_pub(&app);
         for track in &removed_tracks {
-            let deletion = manager::track_to_playlist_song_deletion_pub(
-                playlist_id,
-                track,
-                device_id.clone(),
-            );
+            let deletion =
+                manager::track_to_playlist_song_deletion_pub(playlist_id, track, device_id.clone());
             store.record_playlist_song_deletion(deletion);
         }
         store.save(&path)?;
@@ -538,7 +581,11 @@ pub async fn reorder_playlist_tracks(
 
 fn playlist_track_order_aliases(track: &TrackInfo) -> Vec<String> {
     let mut aliases = vec![playlist_track_key(track)];
-    if let Some(key) = track.playlist_key.as_ref().filter(|key| !key.trim().is_empty()) {
+    if let Some(key) = track
+        .playlist_key
+        .as_ref()
+        .filter(|key| !key.trim().is_empty())
+    {
         aliases.push(key.clone());
     }
     if !track.id.is_empty() {
