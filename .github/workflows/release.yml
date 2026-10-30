@@ -184,14 +184,14 @@ jobs:
             target: x86_64-pc-windows-msvc
             bundles: nsis,msi
             artifact_name: windows-x86_64
-          - platform: macos-15
+          - platform: macos-latest
             os: macos
             target: aarch64-apple-darwin
             bundles: dmg
             deployment_target: '11.0'
             expected_arch: arm64
             artifact_name: macos-apple-silicon-adhoc
-          - platform: macos-15
+          - platform: macos-latest
             os: macos
             target: x86_64-apple-darwin
             bundles: dmg
