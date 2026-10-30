@@ -9,7 +9,6 @@ import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
 import { invoke } from '@tauri-apps/api/core'
 import { extractPalette, type PaletteResult } from '@/utils/paletteExtractor'
-import { shouldShowDynamicBackground } from '@/utils/nowPlayingBackground'
 import {
   normalizeCoverUrlForDisplay,
   normalizeProxiedCoverUrl,
@@ -31,7 +30,6 @@ import { offsetBucketForSource } from '@/modules/lyrics/lyricOffset'
 import { isEditableTarget } from '@/modules/shortcuts/platform'
 import { persistTrackSyncPayload, withUpdatedCustomInfoPayload } from '@/modules/lyrics/syncTrackPayload'
 import { useLyricOffsetStore } from '@/stores/lyricOffset'
-import HyperBackground from './HyperBackground.vue'
 import CoverBlurBackground from './CoverBlurBackground.vue'
 import BilibiliCoverImage from './BilibiliCoverImage.vue'
 import WaveformSlider from './WaveformSlider.vue'
@@ -413,24 +411,12 @@ function onSliderPreviewEnd() {
 }
 
 // 从封面提取的动态颜色（归一化 RGBA）
-function createDefaultExtractedColors(): [number[], number[], number[], number[], number[]] {
-  return [
-    [0.07, 0.27, 0.42, 1],
-    [0.35, 0.24, 0.20, 1],
-    [0.34, 0.12, 0.26, 1],
-    [0.17, 0.14, 0.34, 1],
-    [0.18, 0.34, 0.36, 1],
-  ]
-}
-
-const extractedColors = ref(createDefaultExtractedColors())
 const paletteResult = ref<PaletteResult | null>(null)
 const PALETTE_COVER_DECODE_SIZE = 320
 let paletteRequestToken = 0
 
 function resetExtractedPalette() {
   paletteResult.value = null
-  extractedColors.value = createDefaultExtractedColors()
 }
 
 // 使用 Android 同尺寸封面采样，避免小图把细节压成单色
@@ -459,9 +445,6 @@ function extractColorsFromCover(url: string): Promise<boolean> {
 
         const palette = extractPalette(imageData, 16)
         paletteResult.value = palette
-        extractedColors.value = palette.shaderColors.map(
-          (c) => [c[0] / 255, c[1] / 255, c[2] / 255, 1]
-        ) as [number[], number[], number[], number[], number[]]
         resolve(true)
       } catch (error) {
         if (requestToken === paletteRequestToken) resetExtractedPalette()
@@ -1807,11 +1790,6 @@ const accentBgStyle = computed(() => {
     background: `rgb(${Math.round(r * (1 - mix) + 18 * mix)}, ${Math.round(g * (1 - mix) + 18 * mix)}, ${Math.round(b * (1 - mix) + 18 * mix)})`,
   }
 })
-const shouldRenderDynamicBackground = computed(() => shouldShowDynamicBackground(
-  player.hasPlaybackSession,
-  settings.dynamicBackground,
-  paletteResult.value,
-))
 
 // 动态主题 CSS 变量（对齐 Android M3 动态配色）
 const dynamicColorVars = computed(() => {
@@ -1902,24 +1880,13 @@ const sliderActiveColor = computed(() => {
   >
     <!-- AccentBackdrop 底色层（对齐 Android：主色降饱和+调暗） -->
     <div class="np-bg-solid" :style="accentBgStyle" />
-    <!-- 动态背景：封面模糊 OR WebGL 着色器，互斥 -->
+    <!-- 播放页固定使用封面模糊，旧背景模式设置不再影响渲染 -->
     <CoverBlurBackground
-      v-if="player.hasPlaybackSession && settings.coverBlurBg"
+      v-if="player.hasPlaybackSession"
       :cover-url="coverUrl"
       :blur-amount="settings.coverBlurAmount * 30"
       :darken-alpha="Math.min(Math.max(settings.coverBlurDarken, 0), 0.8)"
     />
-    <HyperBackground
-      v-else-if="shouldRenderDynamicBackground"
-      :music-level="settings.audioReactive ? player.audioLevel : 0"
-      :beat-impulse="settings.audioReactive ? player.beatImpulse : 0"
-      :colors="extractedColors"
-      :is-dark="true"
-      :light-offset="paletteResult?.lightOffset ?? 0"
-      :saturate-offset="paletteResult?.saturateOffset ?? 0"
-    />
-    <div class="np-scrim" />
-    <div class="np-ambient-glow" />
 
     <!-- 顶栏（融合模式下由 TitleBar 接管） -->
     <header v-if="!props.hideHeader" class="np-header">
@@ -2545,7 +2512,7 @@ const sliderActiveColor = computed(() => {
             </div>
             <div class="np-more-item">
               <div class="np-more-row">
-                <input type="range" min="0.6" max="1.6" step="0.05"
+                <input type="range" min="0.5" max="1.5" step="0.05"
                   :value="settings.lyricFontScale"
                   class="np-more-slider"
                   @input="settings.lyricFontScale = parseFloat(($event.target as HTMLInputElement).value)"
@@ -2553,8 +2520,8 @@ const sliderActiveColor = computed(() => {
                 <EditableRangeValue
                   v-model="settings.lyricFontScale"
                   class="np-offset-value"
-                  :min="0.6"
-                  :max="1.6"
+                  :min="0.5"
+                  :max="1.5"
                   :step="0.05"
                   :input-scale="100"
                   :display-value="`${Math.round(settings.lyricFontScale * 100)}%`"
@@ -3046,55 +3013,12 @@ const sliderActiveColor = computed(() => {
   animation: none;
 }
 
-.np-shell--beat-active .np-ambient-glow::before {
-  animation: np-beat-shell-bloom 320ms cubic-bezier(0.22, 1, 0.36, 1);
-}
-
 // 纯色底层：由 accentBgStyle 动态控制颜色
 .np-bg-solid {
   position: absolute;
   inset: 0;
   z-index: -1;
   transition: background 0.8s ease;
-}
-
-// 对齐 Android：无全局遮罩，对比度完全由文字颜色和动态配色保证
-.np-scrim {
-  display: none;
-}
-
-/* 环境光：纯 radial 渐变，禁止 filter:blur（滤镜矩形盒会在窗角露出方框） */
-.np-ambient-glow {
-  position: absolute;
-  inset: 0;
-  z-index: 1;
-  pointer-events: none;
-  overflow: hidden;
-}
-
-.np-ambient-glow::before {
-  content: '';
-  position: absolute;
-  inset: 0;
-  background:
-    radial-gradient(ellipse 70% 58% at 28% 24%,
-      color-mix(in srgb, var(--np-primary, rgba(255,255,255,0.34)) 38%, transparent) 0%,
-      color-mix(in srgb, var(--np-primary, rgba(255,255,255,0.34)) 16%, transparent) 38%,
-      transparent 68%),
-    radial-gradient(ellipse 62% 54% at 78% 78%,
-      color-mix(in srgb, var(--np-primary-container, rgba(255,255,255,0.30)) 30%, transparent) 0%,
-      color-mix(in srgb, var(--np-primary-container, rgba(255,255,255,0.30)) 12%, transparent) 42%,
-      transparent 72%),
-    radial-gradient(ellipse 48% 40% at 55% 48%,
-      color-mix(in srgb, var(--np-primary, rgba(255,255,255,0.20)) 10%, transparent) 0%,
-      transparent 70%);
-  opacity: 0.48;
-  transform: scale(1);
-  transition: opacity 420ms ease, transform 620ms cubic-bezier(0.22, 1, 0.36, 1);
-}
-
-.np-shell--track-switching .np-ambient-glow::before {
-  animation: np-glow-breathe 620ms cubic-bezier(0.22, 1, 0.36, 1);
 }
 
 /* 打开/关闭时内容不做 settle 位移或缩放，只跟随外壳上滑 */
@@ -3788,21 +3712,6 @@ const sliderActiveColor = computed(() => {
 
 /* 壳层/内容开合动画已禁用：仅保留 App.slide-up 的 translateY */
 
-@keyframes np-glow-breathe {
-  0% {
-    opacity: 0.28;
-    transform: scale(1.02);
-  }
-  48% {
-    opacity: 0.58;
-    transform: scale(1.0);
-  }
-  100% {
-    opacity: 0.48;
-    transform: scale(1);
-  }
-}
-
 @keyframes np-controls-breathe {
   0% {
     transform: translateY(6px);
@@ -3844,21 +3753,6 @@ const sliderActiveColor = computed(() => {
     transform: scale(1.08);
   }
   100% {
-    transform: scale(1);
-  }
-}
-
-@keyframes np-beat-shell-bloom {
-  0% {
-    opacity: 0.48;
-    transform: scale(1);
-  }
-  50% {
-    opacity: 0.64;
-    transform: scale(1.03);
-  }
-  100% {
-    opacity: 0.48;
     transform: scale(1);
   }
 }

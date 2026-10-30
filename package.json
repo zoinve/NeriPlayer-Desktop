@@ -8,6 +8,8 @@
     "dev": "vite",
     "build": "vue-tsc --build && vite build",
     "preview": "vite preview",
+    "test:now-playing-background": "node scripts/test-now-playing-background.mjs",
+    "test:lyrics-font-size": "node scripts/test-lyrics-font-size.mjs",
     "test:bilibili-cover-cache": "node scripts/test-bilibili-cover-cache.mjs",
     "test:lyrics-request": "node scripts/test-lyrics-request.mjs",
     "test:playback-request": "node scripts/playback-request.test.mjs",

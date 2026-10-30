@@ -1,33 +1,72 @@
 import assert from 'node:assert/strict'
-import { readFile } from 'node:fs/promises'
-import ts from 'typescript'
+import { test } from 'node:test'
+import { template, compileFragment, render as renderFragment } from './helpers/vue-ssr.mjs'
 
-const sourceUrl = new URL('../src/utils/nowPlayingBackground.ts', import.meta.url)
-const source = await readFile(sourceUrl, 'utf8')
-const compiled = ts.transpileModule(source, {
-  compilerOptions: {
-    module: ts.ModuleKind.ES2022,
-    target: ts.ScriptTarget.ES2022,
-  },
-}).outputText
-const moduleUrl = `data:text/javascript;base64,${Buffer.from(compiled).toString('base64')}`
-const { shouldShowDynamicBackground } = await import(moduleUrl)
+const playerRoot = template('src/components/NowPlaying.vue').children.find(node => node.type === 1)
+const headerIndex = playerRoot.children.findIndex(node => node.tag === 'header')
+assert.ok(headerIndex > 0, 'playback background precedes the header')
+const renderBackground = compileFragment(playerRoot.children.slice(0, headerIndex))
+const motionSection = template('src/views/SettingsView.vue').children
+  .flatMap(function visit(node) { return [node, ...(node.children ?? []).flatMap(visit)] })
+  .find(node => node.props?.some(prop => prop.name === 'show' && prop.exp?.content === "activeSettingsSection === 'motion'"))
+assert.ok(motionSection, 'motion settings section exists')
+const renderSettings = compileFragment([motionSection])
 
-const palette = {
-  shaderColors: [],
-  lightOffset: 0,
-  saturateOffset: 0,
-  accentBg: [18, 18, 18],
-  primaryColor: [18, 18, 18],
-  dominant: [18, 18, 18],
-  lightVibrant: [18, 18, 18],
-  muted: [18, 18, 18],
-  darkMuted: [18, 18, 18],
+async function render(renderFunction, state) {
+  return renderFragment(renderFunction, state, ['CoverBlurBackground', 'HyperBackground', 'ui/EditableRangeValue'])
 }
 
-assert.equal(shouldShowDynamicBackground(false, true, palette), false)
-assert.equal(shouldShowDynamicBackground(true, false, palette), false)
-assert.equal(shouldShowDynamicBackground(true, true, null), false)
-assert.equal(shouldShowDynamicBackground(true, true, palette), true)
+function backgroundState(overrides = {}) {
+  return {
+    player: { hasPlaybackSession: true, audioLevel: 0.8, beatImpulse: 1 },
+    settings: { coverBlurBg: false, dynamicBackground: true, audioReactive: true, coverBlurAmount: 1.5, coverBlurDarken: 0.2 },
+    coverUrl: 'https://example.com/cover.jpg',
+    accentBgStyle: { background: 'rgb(18,18,18)' },
+    shouldRenderDynamicBackground: true,
+    extractedColors: undefined,
+    paletteResult: null,
+    ...overrides,
+  }
+}
 
-console.log('now playing background tests passed')
+for (const coverBlurBg of [false, true]) {
+  for (const dynamicBackground of [false, true]) {
+    test(`always renders only the blurred cover with legacy flags ${coverBlurBg}/${dynamicBackground}`, async () => {
+      const state = backgroundState()
+      Object.assign(state.settings, { coverBlurBg, dynamicBackground })
+      const html = await render(renderBackground, state)
+      assert.match(html, /class="cover-blur-bg"/)
+      assert.match(html, /src="https:\/\/example.com\/cover.jpg"/)
+      assert.match(html, /blur\(45px\)/)
+      assert.match(html, /rgba\(0,0,0,0\.2\)/)
+      assert.doesNotMatch(html, /<canvas|np-ambient-glow|np-scrim/)
+    })
+  }
+}
+
+test('without a playback session only the fallback is rendered', async () => {
+  const html = await render(renderBackground, backgroundState({
+    player: { hasPlaybackSession: false }, shouldRenderDynamicBackground: false,
+  }))
+  assert.match(html, /np-bg-solid/)
+  assert.doesNotMatch(html, /<img|<canvas|np-ambient-glow/)
+})
+
+test('missing cover keeps the fallback without starting a shader', async () => {
+  const html = await render(renderBackground, backgroundState({ coverUrl: '' }))
+  assert.match(html, /np-bg-solid/)
+  assert.doesNotMatch(html, /<img|<canvas|np-ambient-glow/)
+})
+
+test('blur settings remain visible when legacy background flags are off', async () => {
+  const html = await render(renderSettings, {
+    t: key => key, activeSettingsSection: 'motion', isExpanded: () => true,
+    onExpandEnter() {}, onExpandAfterEnter() {}, onExpandLeave() {}, onExpandAfterLeave() {},
+    advancedLyrics: true, dynamicBackground: false, audioReactive: true, coverBlurBg: false,
+    coverBlurAmount: 1.5, coverBlurDarken: 0.2,
+  })
+  assert.match(html, /settings.blur_amount/)
+  assert.match(html, /settings.bg_darken/)
+  assert.equal((html.match(/type="range"/g) ?? []).length, 2)
+  assert.doesNotMatch(html, /settings.dynamic_bg|settings.cover_blur_desc/)
+})

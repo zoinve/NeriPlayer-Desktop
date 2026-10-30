@@ -675,7 +675,8 @@ watch(() => props.seekSeq, (seq, oldSeq) => {
     transparent 94%
   );
   --amll-lp-color: white;
-  --amll-lp-font-size: calc(max(max(5vh, 2.5vw), 12px) * var(--lyric-font-scale, 1));
+  /* 固定基准字号，避免窗口化和全屏时随视口尺寸改变。 */
+  --amll-lp-font-size: calc(40px * var(--lyric-font-scale, 1));
   --amll-lp-emphasis-glow-opacity-boost: 5.6;
   --amll-lp-emphasis-glow-min-opacity: 0.58;
   --amll-lp-emphasis-glow-max-opacity: 0.96;

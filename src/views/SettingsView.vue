@@ -53,8 +53,8 @@ const {
   keepProgress, keepPlaybackMode,
   showTranslation, lyricBlur, lyricBlurAmount,
   cloudMusicOffset, qqMusicOffset,
-  advancedLyrics, dynamicBackground, dynamicColor, audioReactive,
-  coverBlurBg, coverBlurAmount, coverBlurDarken,
+  advancedLyrics, dynamicColor,
+  coverBlurAmount, coverBlurDarken,
   neteaseQuality, qqMusicQuality, youtubeQuality, biliQuality,
   bypassProxy, internationalizationEnabled,
   backgroundImageUri, backgroundImageBlur, backgroundImageAlpha,
@@ -142,15 +142,6 @@ const activeColorKey = ref(selectedColor.value || getSavedThemeColor())
 
 watch(selectedColor, value => {
   activeColorKey.value = value
-})
-
-// 动态背景与封面模糊互斥（对齐 Android effectiveDynamicBackgroundEnabled = dynamic && !coverBlur）:
-// 启用一方即关闭另一方，避免 coverBlurBg 残留导致动态背景开关看似失效
-watch(dynamicBackground, on => {
-  if (on && coverBlurBg.value) coverBlurBg.value = false
-})
-watch(coverBlurBg, on => {
-  if (on && dynamicBackground.value) dynamicBackground.value = false
 })
 
 // 文件日志开关仅在下次启动生效（受插件限制）：用户切换时提示需重启。
@@ -1289,24 +1280,6 @@ function confirmDataSaverChange() {
         <label class="m3-switch"><input type="checkbox" v-model="showAudioSpec" /><span class="track"><span class="thumb"><span v-if="showAudioSpec" class="material-symbols-rounded" style="font-size: 14px">check</span></span></span></label>
       </div>
 
-      <div class="setting-card">
-        <div class="setting-icon-wrap"><span class="material-symbols-rounded">format_size</span></div>
-        <div class="setting-info">
-          <div class="setting-title">{{ t('settings.lyric_font_size') }}</div>
-          <EditableRangeValue
-            v-model="lyricFontScale"
-            class="setting-desc"
-            :min="0.5"
-            :max="1.5"
-            :step="0.1"
-            :display-value="`${lyricFontScale.toFixed(1)}x`"
-            input-suffix="x"
-            :aria-label="t('settings.lyric_font_size')"
-          />
-        </div>
-        <input type="range" class="m3-slider" v-model.number="lyricFontScale" min="0.5" max="1.5" step="0.1" />
-      </div>
-
       <!-- 封面样式 -->
       <div class="setting-card">
         <div class="setting-icon-wrap"><span class="material-symbols-rounded">album</span></div>
@@ -1693,6 +1666,26 @@ function confirmDataSaverChange() {
     </div>
 
     <div class="setting-card">
+      <div class="setting-icon-wrap"><span class="material-symbols-rounded">format_size</span></div>
+      <div class="setting-info">
+        <div class="setting-title">{{ t('settings.lyric_font_size') }}</div>
+        <div class="setting-desc">{{ t('settings.lyric_font_size_desc') }}</div>
+        <EditableRangeValue
+          v-model="lyricFontScale"
+          class="setting-desc"
+          :min="0.5"
+          :max="1.5"
+          :step="0.05"
+          :input-scale="100"
+          :display-value="`${Math.round(lyricFontScale * 100)}%`"
+          input-suffix="%"
+          :aria-label="t('settings.lyric_font_size')"
+        />
+      </div>
+      <input type="range" class="m3-slider" v-model.number="lyricFontScale" min="0.5" max="1.5" step="0.05" :aria-label="t('settings.lyric_font_size')" />
+    </div>
+
+    <div class="setting-card">
       <div class="setting-icon-wrap"><span class="material-symbols-rounded">translate</span></div>
       <div class="setting-info">
         <div class="setting-title">{{ t('settings.show_translation') }}</div>
@@ -1783,35 +1776,14 @@ function confirmDataSaverChange() {
       <label class="m3-switch"><input type="checkbox" v-model="advancedLyrics" /><span class="track"><span class="thumb"><span v-if="advancedLyrics" class="material-symbols-rounded" style="font-size: 14px">check</span></span></span></label>
     </div>
 
-    <div class="setting-card">
-      <div class="setting-icon-wrap"><span class="material-symbols-rounded">wallpaper</span></div>
-      <div class="setting-info">
-        <div class="setting-title">{{ t('settings.dynamic_bg') }}</div>
-        <div class="setting-desc">{{ t('settings.dynamic_bg_desc') }}</div>
-      </div>
-      <label class="m3-switch"><input type="checkbox" v-model="dynamicBackground" /><span class="track"><span class="thumb"><span v-if="dynamicBackground" class="material-symbols-rounded" style="font-size: 14px">check</span></span></span></label>
-    </div>
-
     <Transition @enter="onExpandEnter" @after-enter="onExpandAfterEnter" @leave="onExpandLeave" @after-leave="onExpandAfterLeave"><div v-if="isExpanded('effects')">
-      <div v-if="dynamicBackground" class="setting-card sub-card">
-        <div class="setting-icon-wrap"><span class="material-symbols-rounded">graphic_eq</span></div>
-        <div class="setting-info">
-          <div class="setting-title">{{ t('settings.audio_reactive') }}</div>
-          <div class="setting-desc">{{ t('settings.audio_reactive_desc') }}</div>
-        </div>
-        <label class="m3-switch"><input type="checkbox" v-model="audioReactive" /><span class="track"><span class="thumb"><span v-if="audioReactive" class="material-symbols-rounded" style="font-size: 14px">check</span></span></span></label>
-      </div>
-
       <div class="setting-card">
         <div class="setting-icon-wrap"><span class="material-symbols-rounded">blur_circular</span></div>
         <div class="setting-info">
           <div class="setting-title">{{ t('settings.cover_blur') }}</div>
-          <div class="setting-desc">{{ t('settings.cover_blur_desc') }}</div>
         </div>
-        <label class="m3-switch"><input type="checkbox" v-model="coverBlurBg" /><span class="track"><span class="thumb"><span v-if="coverBlurBg" class="material-symbols-rounded" style="font-size: 14px">check</span></span></span></label>
       </div>
 
-      <template v-if="coverBlurBg">
         <div class="setting-card sub-card">
           <div class="setting-info">
             <div class="setting-title">{{ t('settings.blur_amount') }}</div>
@@ -1844,7 +1816,6 @@ function confirmDataSaverChange() {
           </div>
           <input type="range" class="m3-slider" v-model.number="coverBlurDarken" min="0" max="0.8" step="0.05" />
         </div>
-      </template>
     </div></Transition>
         </div>
 
