@@ -61,7 +61,7 @@ pub struct AppState {
     /// 播放统计, 启动时从磁盘恢复
     pub stats: Mutex<crate::stats::StatsStore>,
     /// 前端切歌时镜像的媒体会话元数据（PlayQueue 从不被前端填充, 不能作为元数据源, PB-01）
-    pub media_metadata: Mutex<Option<MediaMetadataMirror>>,
+    pub media_metadata: Mutex<Option<Arc<MediaMetadataMirror>>>,
     /// 与 http 代理设置相反的备用客户端
     ///
     /// 系统代理配错时直连能通，需要代理才能出网时直连不通 —— 两种情况都存在，

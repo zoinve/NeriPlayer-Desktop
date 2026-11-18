@@ -1,11 +1,15 @@
-// 系统媒体会话集成：Windows SMTC / Linux MPRIS
+// 系统媒体会话集成：Windows SMTC / Linux MPRIS / macOS Now Playing
 // 通过 souvlaki 库实现跨平台媒体键控制和系统通知中心展示
 
-use souvlaki::{
-    MediaControlEvent, MediaControls, MediaMetadata, MediaPlayback, MediaPosition, PlatformConfig,
-};
+#[cfg(not(target_os = "macos"))]
+use souvlaki::MediaMetadata;
+use souvlaki::{MediaControlEvent, MediaControls, MediaPlayback, MediaPosition, PlatformConfig};
 use std::sync::mpsc;
 use std::time::Duration;
+
+#[cfg(target_os = "macos")]
+#[path = "media_session_macos.rs"]
+mod macos;
 
 /// 媒体会话控制器，管理 SMTC/MPRIS 状态
 pub struct MediaSessionController {
@@ -23,7 +27,9 @@ fn normalize_cover_uri(raw: String) -> Option<String> {
     if is_uri {
         return Some(raw);
     }
-    url::Url::from_file_path(&raw).ok().map(|uri| uri.to_string())
+    url::Url::from_file_path(&raw)
+        .ok()
+        .map(|uri| uri.to_string())
 }
 
 enum MediaSessionCmd {
@@ -124,6 +130,9 @@ impl MediaSessionController {
                             // 本地封面是裸文件路径，而 MPRIS mpris:artUrl /
                             // SMTC 缩略图都要求 URI，必须转成 file:// 才能显示
                             let cover_url = cover_url.and_then(normalize_cover_uri);
+                            #[cfg(target_os = "macos")]
+                            macos::set_metadata(&title, &artist, &album, cover_url.as_deref(), dur);
+                            #[cfg(not(target_os = "macos"))]
                             let _ = controls.set_metadata(MediaMetadata {
                                 title: Some(&title),
                                 artist: Some(&artist),
@@ -143,10 +152,10 @@ impl MediaSessionController {
                             } else {
                                 MediaPlayback::Paused { progress }
                             };
-                            let _ = controls.set_playback(playback);
+                            set_playback(&mut controls, playback);
                         }
                         Ok(MediaSessionCmd::Stop) => {
-                            let _ = controls.set_playback(MediaPlayback::Stopped);
+                            set_playback(&mut controls, MediaPlayback::Stopped);
                         }
                         Err(mpsc::RecvTimeoutError::Timeout) => continue,
                         Err(mpsc::RecvTimeoutError::Disconnected) => {
@@ -191,6 +200,14 @@ impl MediaSessionController {
     pub fn stop(&self) {
         let _ = self.cmd_tx.send(MediaSessionCmd::Stop);
     }
+}
+
+fn set_playback(controls: &mut MediaControls, playback: MediaPlayback) {
+    let update = move || controls.set_playback(playback);
+    #[cfg(target_os = "macos")]
+    let _ = objc2::rc::autoreleasepool(|_| update());
+    #[cfg(not(target_os = "macos"))]
+    let _ = update();
 }
 
 #[cfg(test)]

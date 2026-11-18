@@ -1793,6 +1793,7 @@ pub async fn get_player_state(state: State<'_, AppState>) -> AppResult<PlayerSta
 #[tauri::command]
 pub async fn update_media_metadata(
     state: State<'_, AppState>,
+    _app: AppHandle,
     id: String,
     title: String,
     artist: String,
@@ -1800,7 +1801,12 @@ pub async fn update_media_metadata(
     cover_url: Option<String>,
     duration_ms: u64,
 ) -> AppResult<()> {
-    *state.media_metadata.lock() = Some(crate::state::MediaMetadataMirror {
+    #[cfg(target_os = "macos")]
+    let (cover_url, remote_cover) = match cover_url {
+        Some(url) if is_remote_media_cover(&url) => (None, Some(url)),
+        local => (local, None),
+    };
+    let metadata = Arc::new(crate::state::MediaMetadataMirror {
         id,
         title,
         artist,
@@ -1808,7 +1814,33 @@ pub async fn update_media_metadata(
         cover_url,
         duration_ms,
     });
+    *state.media_metadata.lock() = Some(Arc::clone(&metadata));
+
+    #[cfg(target_os = "macos")]
+    if let Some(url) = remote_cover {
+        let result = tokio::time::timeout(
+            std::time::Duration::from_secs(15),
+            super::image_cmd::fetch_bilibili_cover(url, None, _app, state.clone()),
+        )
+        .await;
+        if let Ok(Ok(cover)) = result {
+            let mut current = state.media_metadata.lock();
+            // Track IDs may repeat (including A -> B -> A). Match this exact selection.
+            if let Some(current) = current.as_mut().filter(|item| Arc::ptr_eq(item, &metadata)) {
+                Arc::make_mut(current).cover_url = Some(cover);
+            }
+        } else {
+            log::debug!(target: "media-session", "Could not resolve macOS artwork");
+        }
+    }
     Ok(())
+}
+
+#[cfg(target_os = "macos")]
+fn is_remote_media_cover(cover: &str) -> bool {
+    let cover = cover.trim();
+    cover.starts_with("//")
+        || url::Url::parse(cover).is_ok_and(|url| matches!(url.scheme(), "http" | "https"))
 }
 
 // 废弃/危险: next_track/prev_track/set_queue 以 request_play_file_with_hint 播放

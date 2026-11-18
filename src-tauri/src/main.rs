@@ -9,7 +9,7 @@ use neri_player_desktop::commands::{
     storage_cmd, sync_cmd,
 };
 use neri_player_desktop::state::AppState;
-use std::sync::mpsc;
+use std::sync::{mpsc, Arc};
 use std::time::Duration;
 use tauri::{Emitter, Manager};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
@@ -212,8 +212,8 @@ fn main() {
                 let mut last_ended = false;
                 let mut last_stalled = false;
                 let mut media_update_counter: u32 = 0;
-                // 缓存上次发送给 media session 的元数据 ID，避免重复设置
-                let mut last_media_track_id = String::new();
+                // 同一曲目的封面可以延后到达，按快照身份去重。
+                let mut last_media_metadata = None;
                 // 每 300 tick（约 60s）回收一次服务端轮换的 Cookie
                 let mut cookie_sync_counter: u32 = 0;
 
@@ -260,11 +260,10 @@ fn main() {
                         if player.current_path.is_none() {
                             last_ended = false;
                             // 空闲时也更新 media session 状态
-                            if !last_media_track_id.is_empty() {
+                            if last_media_metadata.take().is_some() {
                                 if let Some(ref ms) = media_session {
                                     ms.stop();
                                 }
-                                last_media_track_id.clear();
                             }
                             continue;
                         }
@@ -313,8 +312,11 @@ fn main() {
                         // SMTC/MPRIS 永远拿不到曲目信息（PB-01）
                         let current_meta = state.media_metadata.lock().clone();
                         if let Some(meta) = current_meta {
-                            if !meta.id.is_empty() && meta.id != last_media_track_id {
-                                last_media_track_id = meta.id.clone();
+                            if !meta.id.is_empty()
+                                && last_media_metadata
+                                    .as_ref()
+                                    .is_none_or(|last| !Arc::ptr_eq(last, &meta))
+                            {
                                 ms.update_metadata(
                                     &meta.title,
                                     &meta.artist,
@@ -322,6 +324,7 @@ fn main() {
                                     meta.cover_url.as_deref(),
                                     meta.duration_ms,
                                 );
+                                last_media_metadata = Some(meta);
                             }
                         }
 
